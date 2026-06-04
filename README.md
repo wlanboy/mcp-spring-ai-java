@@ -134,42 +134,113 @@ Der Server lauscht auf `http://localhost:8080`.
 
 ### 7. MCP-Endpunkte testen
 
-**Tool-Liste abrufen (SSE):**
+#### Automatisiert mit `curl-test.sh`
+
+```bash
+./curl-test.sh
+```
+
+Das Script durchläuft den kompletten MCP-Protokollablauf:
+
+1. Öffnet eine SSE-Verbindung zu `/sse` und liest den Session-Endpoint aus dem Stream
+2. Sendet `initialize` (Handshake mit Protokollversion)
+3. Sendet `notifications/initialized` (Bestätigung)
+4. Ruft `tools/list` auf — zeigt alle registrierten Tools
+5. Ruft `tools/call greet` mit `name=World` auf
+6. Ruft `tools/call serverTime` auf
+
+Beispielausgabe:
+
+```
+Connecting to http://localhost:8080/sse ...
+Session endpoint: /mcp/message?sessionId=003c8063-07bb-49a3-ac42-95e048a10f3a
+
+[initialize]
+{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {
+            "completions": {},
+            "logging": {},
+            "prompts": { "listChanged": true },
+            "resources": { "subscribe": false, "listChanged": true },
+            "tools": { "listChanged": true }
+        },
+        "serverInfo": {
+            "name": "hello-world-mcp",
+            "version": "1.0.0"
+        }
+    }
+}
+
+[notifications/initialized] sent
+
+[tools/list]
+{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+        "tools": [
+            {
+                "name": "greet",
+                "description": "Returns a greeting message for the given name",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "name": { "type": "string" } },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "serverTime",
+                "description": "Returns the current server time as ISO-8601 string",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        ]
+    }
+}
+  Verfügbare Tools:
+    - greet: Returns a greeting message for the given name
+    - serverTime: Returns the current server time as ISO-8601 string
+
+[tools/call greet]
+{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+        "content": [{ "type": "text", "text": "\"Hello, World! Welcome to the MCP Hello World Server.\"" }],
+        "isError": false
+    }
+}
+  => "Hello, World! Welcome to the MCP Hello World Server."
+
+[tools/call serverTime]
+{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+        "content": [{ "type": "text", "text": "\"2026-06-04T08:10:42.098489232Z\"" }],
+        "isError": false
+    }
+}
+  => "2026-06-04T08:10:42.098489232Z"
+```
+
+Der Server-URL kann über die Umgebungsvariable `MCP_SERVER` überschrieben werden:
+
+```bash
+MCP_SERVER=http://myserver:9090 ./curl-test.sh
+```
+
+#### Manuell — SSE-Stream direkt beobachten
 
 ```bash
 curl -N http://localhost:8080/sse
-```
-
-**greet-Tool aufrufen:**
-
-```bash
-curl -X POST http://localhost:8080/mcp/message \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "greet",
-      "arguments": { "name": "World" }
-    }
-  }'
-```
-
-**serverTime-Tool aufrufen:**
-
-```bash
-curl -X POST http://localhost:8080/mcp/message \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/call",
-    "params": {
-      "name": "serverTime",
-      "arguments": {}
-    }
-  }'
 ```
 
 ---
@@ -177,13 +248,14 @@ curl -X POST http://localhost:8080/mcp/message \
 ## Projektstruktur
 
 ```
-src/
-└── main/
-    ├── java/com/example/helloworld/
-    │   ├── HelloworldApplication.java   # Spring Boot Entry Point + Tool-Bean-Registrierung
-    │   └── HelloWorldTools.java         # MCP-Tools mit @Tool-Annotationen
-    └── resources/
-        └── application.properties       # MCP-Server-Konfiguration
+├── curl-test.sh                         # Kompletter MCP-Protokolltest via curl
+└── src/
+    └── main/
+        ├── java/com/example/helloworld/
+        │   ├── HelloworldApplication.java   # Spring Boot Entry Point + Tool-Bean-Registrierung
+        │   └── HelloWorldTools.java         # MCP-Tools mit @Tool-Annotationen
+        └── resources/
+            └── application.properties       # MCP-Server-Konfiguration
 ```
 
 ## Abhängigkeiten
