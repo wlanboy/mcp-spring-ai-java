@@ -1,5 +1,6 @@
 package com.example.helloworld;
 
+import java.time.Clock;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.boot.SpringApplication;
