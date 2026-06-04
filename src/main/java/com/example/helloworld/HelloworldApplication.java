@@ -15,7 +15,8 @@ public class HelloworldApplication {
 	}
 
 	@Bean
-	public ToolCallbackProvider helloWorldToolCallbacks(HelloWorldTools tools) {
-		return MethodToolCallbackProvider.builder().toolObjects(tools).build();
+	public ToolCallbackProvider helloWorldToolCallbacks(HelloWorldTools helloWorldTools,
+			JavaProcessTools javaProcessTools) {
+		return MethodToolCallbackProvider.builder().toolObjects(helloWorldTools, javaProcessTools).build();
 	}
 }
