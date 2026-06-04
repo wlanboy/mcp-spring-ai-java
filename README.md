@@ -244,23 +244,3 @@ curl -N http://localhost:8080/sse
 ```
 
 ---
-
-## Projektstruktur
-
-```
-├── curl-test.sh                         # Kompletter MCP-Protokolltest via curl
-└── src/
-    └── main/
-        ├── java/com/example/helloworld/
-        │   ├── HelloworldApplication.java   # Spring Boot Entry Point + Tool-Bean-Registrierung
-        │   └── HelloWorldTools.java         # MCP-Tools mit @Tool-Annotationen
-        └── resources/
-            └── application.properties       # MCP-Server-Konfiguration
-```
-
-## Abhängigkeiten
-
-| Artefakt | Version | Zweck |
-|---|---|---|
-| `spring-ai-starter-mcp-server-webflux` | 2.0.0-M8 | MCP-Protokoll + WebFlux/SSE-Transport |
-| `spring-boot-configuration-processor` | 4.0.6 | IDE-Autovervollständigung für Properties |
