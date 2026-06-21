@@ -244,3 +244,17 @@ curl -N http://localhost:8080/sse
 ```
 
 ---
+
+## LLM Studio
+
+```json
+{
+  "mcpServers": {
+    "hello-world-mcp": {
+      "type": "sse",
+      "url": "http://localhost:8080/sse"
+    }
+  }
+}
+
+``` 
