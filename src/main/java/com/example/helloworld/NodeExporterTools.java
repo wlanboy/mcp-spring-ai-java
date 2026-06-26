@@ -38,6 +38,13 @@ public class NodeExporterTools {
 
     record Temperature(String chip, String sensor, double celsius, double critCelsius) {}
 
+    record PressureStats(
+            double cpuSomePercent,
+            double ioSomePercent,
+            double ioFullPercent,
+            double memorySomePercent,
+            double memoryFullPercent) {}
+
     @Tool(description = "Returns system memory stats: total, available and used in MB plus usage percentage")
     public MemoryStats getMemoryStats() throws Exception {
         Map<String, Double> metrics = fetchScalars();
@@ -171,6 +178,27 @@ public class NodeExporterTools {
                 .filter(t -> t.celsius() > 0)
                 .sorted((a, b) -> Double.compare(b.celsius(), a.celsius()))
                 .toList();
+    }
+
+    @Tool(description = "Returns Linux PSI (Pressure Stall Information) as percent of time the system was stalled on CPU, IO or memory, measured over 1 second. 'full' means ALL tasks were blocked.")
+    public PressureStats getPressureStats() throws Exception {
+        Map<String, Double> first = fetchScalars();
+        long t0 = System.nanoTime();
+        Thread.sleep(1000);
+        Map<String, Double> second = fetchScalars();
+        double elapsed = (System.nanoTime() - t0) / 1_000_000_000.0;
+
+        return new PressureStats(
+                psiPercent(first, second, "node_pressure_cpu_waiting_seconds_total", elapsed),
+                psiPercent(first, second, "node_pressure_io_waiting_seconds_total", elapsed),
+                psiPercent(first, second, "node_pressure_io_stalled_seconds_total", elapsed),
+                psiPercent(first, second, "node_pressure_memory_waiting_seconds_total", elapsed),
+                psiPercent(first, second, "node_pressure_memory_stalled_seconds_total", elapsed));
+    }
+
+    private static double psiPercent(Map<String, Double> first, Map<String, Double> second, String key, double elapsed) {
+        double delta = second.getOrDefault(key, 0.0) - first.getOrDefault(key, 0.0);
+        return round(Math.max(0, delta) / elapsed * 100);
     }
 
     private Map<String, double[]> fetchDiskBytes() throws Exception {

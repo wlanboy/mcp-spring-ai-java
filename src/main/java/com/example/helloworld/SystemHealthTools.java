@@ -29,6 +29,24 @@ public class SystemHealthTools {
     @Value("${health.threshold.temperature.critical:95}")
     private double tempCriticalPercent;
 
+    @Value("${health.threshold.psi.io.full.warning:5}")
+    private double psiIoFullWarning;
+
+    @Value("${health.threshold.psi.io.full.critical:20}")
+    private double psiIoFullCritical;
+
+    @Value("${health.threshold.psi.memory.full.warning:1}")
+    private double psiMemFullWarning;
+
+    @Value("${health.threshold.psi.memory.full.critical:10}")
+    private double psiMemFullCritical;
+
+    @Value("${health.threshold.psi.cpu.some.warning:30}")
+    private double psiCpuSomeWarning;
+
+    @Value("${health.threshold.psi.cpu.some.critical:70}")
+    private double psiCpuSomeCritical;
+
     public SystemHealthTools(NodeExporterTools nodeExporter) {
         this.nodeExporter = nodeExporter;
     }
@@ -37,7 +55,7 @@ public class SystemHealthTools {
 
     record Anomaly(String metric, String value, Severity severity, String message) {}
 
-    @Tool(description = "Checks CPU, memory, system load and hardware temperatures for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.")
+    @Tool(description = "Checks CPU, memory, system load, hardware temperatures and Linux PSI pressure for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.")
     public List<Anomaly> getSystemAnomalies() throws Exception {
         List<Anomaly> results = new ArrayList<>();
 
@@ -61,6 +79,21 @@ public class SystemHealthTools {
                 load.load1(), cores));
 
         results.addAll(checkTemperatures());
+        results.addAll(checkPressure());
+
+        return results;
+    }
+
+    private List<Anomaly> checkPressure() throws Exception {
+        NodeExporterTools.PressureStats p = nodeExporter.getPressureStats();
+        List<Anomaly> results = new ArrayList<>();
+
+        results.add(check("psi:cpu:some",   "%.1f%%".formatted(p.cpuSomePercent()),
+                p.cpuSomePercent(), psiCpuSomeWarning, psiCpuSomeCritical, "CPU pressure (some)"));
+        results.add(check("psi:io:full",    "%.1f%%".formatted(p.ioFullPercent()),
+                p.ioFullPercent(), psiIoFullWarning, psiIoFullCritical, "IO pressure (full)"));
+        results.add(check("psi:memory:full","%.1f%%".formatted(p.memoryFullPercent()),
+                p.memoryFullPercent(), psiMemFullWarning, psiMemFullCritical, "Memory pressure (full)"));
 
         return results;
     }
