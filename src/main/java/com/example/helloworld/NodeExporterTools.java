@@ -32,6 +32,12 @@ public class NodeExporterTools {
 
     record CpuUsage(double userPercent, double systemPercent, double idlePercent, double totalUsedPercent) {}
 
+    record DiskActivity(String device, double readMbPerSec, double writeMbPerSec) {}
+
+    record NetworkErrors(String iface, long receiveErrors, long transmitErrors, long receiveDrops, long transmitDrops) {}
+
+    record Temperature(String chip, String sensor, double celsius, double critCelsius) {}
+
     @Tool(description = "Returns system memory stats: total, available and used in MB plus usage percentage")
     public MemoryStats getMemoryStats() throws Exception {
         Map<String, Double> metrics = fetchScalars();
@@ -107,6 +113,76 @@ public class NodeExporterTools {
         if (bootTime == 0) return "Unknown";
         long uptimeSec = Instant.now().getEpochSecond() - (long) bootTime;
         return "%d hours %d minutes".formatted(uptimeSec / 3600, (uptimeSec % 3600) / 60);
+    }
+
+    @Tool(description = "Returns disk read and write activity in MB/s per device, measured over 1 second")
+    public List<DiskActivity> getDiskActivity() throws Exception {
+        Map<String, double[]> first = fetchDiskBytes();
+        Thread.sleep(1000);
+        Map<String, double[]> second = fetchDiskBytes();
+
+        List<DiskActivity> result = new ArrayList<>();
+        for (String device : first.keySet()) {
+            double[] f = first.get(device);
+            double[] s = second.getOrDefault(device, new double[]{0.0, 0.0});
+            result.add(new DiskActivity(device, round((s[0] - f[0]) / 1_048_576), round((s[1] - f[1]) / 1_048_576)));
+        }
+        result.sort((a, b) -> a.device().compareTo(b.device()));
+        return result;
+    }
+
+    @Tool(description = "Returns cumulative network errors and packet drops per interface since system boot")
+    public List<NetworkErrors> getNetworkErrors() throws Exception {
+        Map<String, long[]> data = new HashMap<>();
+        for (String line : fetchRaw().lines().toList()) {
+            if (line.startsWith("node_network_receive_errs_total{")) {
+                data.computeIfAbsent(extractLabel(line, "device"), k -> new long[4])[0] = (long) extractValue(line);
+            } else if (line.startsWith("node_network_transmit_errs_total{")) {
+                data.computeIfAbsent(extractLabel(line, "device"), k -> new long[4])[1] = (long) extractValue(line);
+            } else if (line.startsWith("node_network_receive_drop_total{")) {
+                data.computeIfAbsent(extractLabel(line, "device"), k -> new long[4])[2] = (long) extractValue(line);
+            } else if (line.startsWith("node_network_transmit_drop_total{")) {
+                data.computeIfAbsent(extractLabel(line, "device"), k -> new long[4])[3] = (long) extractValue(line);
+            }
+        }
+        return data.entrySet().stream()
+                .map(e -> new NetworkErrors(e.getKey(), e.getValue()[0], e.getValue()[1], e.getValue()[2], e.getValue()[3]))
+                .sorted((a, b) -> a.iface().compareTo(b.iface()))
+                .toList();
+    }
+
+    @Tool(description = "Returns hardware temperatures in Celsius per sensor with critical threshold. Sorted by temperature descending.")
+    public List<Temperature> getTemperatures() throws Exception {
+        Map<String, double[]> data = new HashMap<>();
+        for (String line : fetchRaw().lines().toList()) {
+            if (line.startsWith("node_hwmon_temp_celsius{")) {
+                String key = extractLabel(line, "chip") + "|" + extractLabel(line, "sensor");
+                data.computeIfAbsent(key, k -> new double[2])[0] = extractValue(line);
+            } else if (line.startsWith("node_hwmon_temp_crit_celsius{")) {
+                String key = extractLabel(line, "chip") + "|" + extractLabel(line, "sensor");
+                data.computeIfAbsent(key, k -> new double[2])[1] = extractValue(line);
+            }
+        }
+        return data.entrySet().stream()
+                .map(e -> {
+                    String[] parts = e.getKey().split("\\|", 2);
+                    return new Temperature(parts[0], parts[1], e.getValue()[0], e.getValue()[1]);
+                })
+                .filter(t -> t.celsius() > 0)
+                .sorted((a, b) -> Double.compare(b.celsius(), a.celsius()))
+                .toList();
+    }
+
+    private Map<String, double[]> fetchDiskBytes() throws Exception {
+        Map<String, double[]> result = new HashMap<>();
+        for (String line : fetchRaw().lines().toList()) {
+            if (line.startsWith("node_disk_read_bytes_total{")) {
+                result.computeIfAbsent(extractLabel(line, "device"), k -> new double[2])[0] = extractValue(line);
+            } else if (line.startsWith("node_disk_written_bytes_total{")) {
+                result.computeIfAbsent(extractLabel(line, "device"), k -> new double[2])[1] = extractValue(line);
+            }
+        }
+        return result;
     }
 
     private Map<String, Map<String, Double>> fetchCpuSeconds() throws Exception {

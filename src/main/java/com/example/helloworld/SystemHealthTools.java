@@ -23,6 +23,12 @@ public class SystemHealthTools {
     @Value("${health.threshold.memory.critical:90}")
     private double memoryCritical;
 
+    @Value("${health.threshold.temperature.warning:80}")
+    private double tempWarningPercent;
+
+    @Value("${health.threshold.temperature.critical:95}")
+    private double tempCriticalPercent;
+
     public SystemHealthTools(NodeExporterTools nodeExporter) {
         this.nodeExporter = nodeExporter;
     }
@@ -31,7 +37,7 @@ public class SystemHealthTools {
 
     record Anomaly(String metric, String value, Severity severity, String message) {}
 
-    @Tool(description = "Checks CPU, memory and system load for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.")
+    @Tool(description = "Checks CPU, memory, system load and hardware temperatures for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.")
     public List<Anomaly> getSystemAnomalies() throws Exception {
         List<Anomaly> results = new ArrayList<>();
 
@@ -54,6 +60,27 @@ public class SystemHealthTools {
                 "%.2f / %.2f / %.2f (cores: %d)".formatted(load.load1(), load.load5(), load.load15(), cores),
                 load.load1(), cores));
 
+        results.addAll(checkTemperatures());
+
+        return results;
+    }
+
+    private List<Anomaly> checkTemperatures() throws Exception {
+        List<Anomaly> results = new ArrayList<>();
+        for (NodeExporterTools.Temperature t : nodeExporter.getTemperatures()) {
+            if (t.critCelsius() <= 0) continue;
+            double pct = t.celsius() / t.critCelsius() * 100;
+            String value = "%.1f°C (crit: %.1f°C)".formatted(t.celsius(), t.critCelsius());
+            String label = "%s/%s".formatted(t.chip(), t.sensor());
+            if (pct >= tempCriticalPercent)
+                results.add(new Anomaly("temperature:" + label, value, Severity.CRITICAL,
+                        "Temperature critically high: %.1f°C is %.0f%% of critical threshold".formatted(t.celsius(), pct)));
+            else if (pct >= tempWarningPercent)
+                results.add(new Anomaly("temperature:" + label, value, Severity.WARNING,
+                        "Temperature elevated: %.1f°C is %.0f%% of critical threshold".formatted(t.celsius(), pct)));
+        }
+        if (results.isEmpty())
+            results.add(new Anomaly("temperature", "all sensors normal", Severity.OK, "All temperatures within safe range"));
         return results;
     }
 
