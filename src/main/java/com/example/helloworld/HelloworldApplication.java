@@ -1,6 +1,5 @@
 package com.example.helloworld;
 
-import java.time.Clock;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.boot.SpringApplication;
@@ -16,7 +15,7 @@ public class HelloworldApplication {
 
 	@Bean
 	public ToolCallbackProvider helloWorldToolCallbacks(HelloWorldTools helloWorldTools,
-			JavaProcessTools javaProcessTools) {
-		return MethodToolCallbackProvider.builder().toolObjects(helloWorldTools, javaProcessTools).build();
+			JavaProcessTools javaProcessTools, NodeExporterTools nodeExporterTools, SystemHealthTools systemHealthTools) {
+		return MethodToolCallbackProvider.builder().toolObjects(helloWorldTools, javaProcessTools, nodeExporterTools, systemHealthTools).build();
 	}
 }
