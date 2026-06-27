@@ -13,21 +13,25 @@ Ein minimaler MCP-Server (Model Context Protocol) auf Basis von Spring Boot 4 un
 
 ```bash
 curl -s -o spring-init.zip "https://start.spring.io/starter.zip?\
-type=maven-project&language=java&bootVersion=4.0.6\
+type=maven-project&language=java&bootVersion=4.1.0\
 &groupId=com.example&artifactId=helloworld\
 &packageName=com.example.helloworld&javaVersion=25\
-&dependencies=configuration-processor"
+&dependencies=configuration-processor,spring-ai-mcp-server,webflux"
 unzip spring-init.zip
 ```
 
 Spring Initializr liefert ein fertiges Maven-Projekt mit `mvnw`, `.gitignore` und
 einer leeren `HelloworldApplication.java`.
 
+> **Hinweis:** `spring-ai-mcp-server` erzeugt den Servlet-Starter
+> `spring-ai-starter-mcp-server`. In Schritt 2b wird das Artifact auf die
+> WebFlux-Variante `spring-ai-starter-mcp-server-webflux` geändert.
+
 ---
 
 ### 2. pom.xml anpassen
 
-Zwei Ergänzungen gegenüber dem generierten Stand:
+Drei Anpassungen gegenüber dem generierten Stand:
 
 **a) `start-class` in `<properties>` eintragen** (für AOT-fähiges Packaging):
 
@@ -38,15 +42,21 @@ Zwei Ergänzungen gegenüber dem generierten Stand:
 </properties>
 ```
 
-**b) MCP-Server-Starter hinzufügen** (Spring AI WebFlux / SSE-Transport):
+**b) Generierten MCP-Starter auf WebFlux-Variante umstellen:**
+
+Der Initializr erzeugt den Servlet-basierten Starter. Den `artifactId` auf die
+reaktive Variante ändern:
 
 ```xml
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
-    <version>2.0.0-M8</version>
-</dependency>
+<!-- generiert (ersetzen): -->
+<artifactId>spring-ai-starter-mcp-server</artifactId>
+
+<!-- ersetzen durch: -->
+<artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
 ```
+
+Der Starter zieht WebFlux, Reactor und den MCP-Protokollstack selbst mit —
+`spring-boot-starter-webflux` muss nicht separat eingetragen werden.
 
 **c) Spring Milestones Repository** (da M8 noch kein GA-Release ist):
 
@@ -61,9 +71,6 @@ Zwei Ergänzungen gegenüber dem generierten Stand:
 </repositories>
 ```
 
-Der `spring-boot-starter` aus dem Initializr-Template wird durch
-`spring-ai-starter-mcp-server-webflux` ersetzt — der Starter zieht
-WebFlux, Reactor und den MCP-Protokollstack selbst mit.
 
 ---
 
