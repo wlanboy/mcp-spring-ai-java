@@ -23,6 +23,18 @@ public class SystemHealthTools {
     @Value("${health.threshold.memory.critical:90}")
     private double memoryCritical;
 
+    @Value("${health.threshold.swap.warning:70}")
+    private double swapWarning;
+
+    @Value("${health.threshold.swap.critical:90}")
+    private double swapCritical;
+
+    @Value("${health.threshold.disk.warning:80}")
+    private double diskWarning;
+
+    @Value("${health.threshold.disk.critical:90}")
+    private double diskCritical;
+
     @Value("${health.threshold.temperature.warning:80}")
     private double tempWarningPercent;
 
@@ -55,7 +67,7 @@ public class SystemHealthTools {
 
     record Anomaly(String metric, String value, Severity severity, String message) {}
 
-    @Tool(description = "Checks CPU, memory, system load, hardware temperatures and Linux PSI pressure for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.")
+    @Tool(description = "Checks CPU, memory, swap, disk space, system load, hardware temperatures and Linux PSI pressure for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.")
     public List<Anomaly> getSystemAnomalies() throws Exception {
         List<Anomaly> results = new ArrayList<>();
 
@@ -64,6 +76,14 @@ public class SystemHealthTools {
                 "memory",
                 "%.1f%% (%d/%d MB used)".formatted(mem.usedPercent(), mem.usedMb(), mem.totalMb()),
                 mem.usedPercent(), memoryWarning, memoryCritical, "Memory usage"));
+
+        NodeExporterTools.SwapStats swap = nodeExporter.getSwapStats();
+        if (swap.totalMb() > 0) {
+            results.add(check(
+                    "swap",
+                    "%.1f%% (%d/%d MB used)".formatted(swap.usedPercent(), swap.usedMb(), swap.totalMb()),
+                    swap.usedPercent(), swapWarning, swapCritical, "Swap usage"));
+        }
 
         NodeExporterTools.CpuUsage cpu = nodeExporter.getCpuUsage();
         results.add(check(
@@ -78,9 +98,25 @@ public class SystemHealthTools {
                 "%.2f / %.2f / %.2f (cores: %d)".formatted(load.load1(), load.load5(), load.load15(), cores),
                 load.load1(), cores));
 
+        results.addAll(checkDiskSpace());
         results.addAll(checkTemperatures());
         results.addAll(checkPressure());
 
+        return results;
+    }
+
+    private List<Anomaly> checkDiskSpace() throws Exception {
+        List<Anomaly> results = new ArrayList<>();
+        for (NodeExporterTools.DiskSpace disk : nodeExporter.getDiskSpace()) {
+            results.add(check(
+                    "disk:" + disk.mountPoint(),
+                    "%.1f%% (%d/%d GB used)".formatted(disk.usedPercent(), disk.usedGb(), disk.totalGb()),
+                    disk.usedPercent(), diskWarning, diskCritical,
+                    "Disk " + disk.mountPoint()));
+        }
+        if (results.isEmpty()) {
+            results.add(new Anomaly("disk", "no real filesystems found", Severity.OK, "No real filesystems to check"));
+        }
         return results;
     }
 
@@ -88,11 +124,11 @@ public class SystemHealthTools {
         NodeExporterTools.PressureStats p = nodeExporter.getPressureStats();
         List<Anomaly> results = new ArrayList<>();
 
-        results.add(check("psi:cpu:some",   "%.1f%%".formatted(p.cpuSomePercent()),
+        results.add(check("psi:cpu:some",    "%.1f%%".formatted(p.cpuSomePercent()),
                 p.cpuSomePercent(), psiCpuSomeWarning, psiCpuSomeCritical, "CPU pressure (some)"));
-        results.add(check("psi:io:full",    "%.1f%%".formatted(p.ioFullPercent()),
+        results.add(check("psi:io:full",     "%.1f%%".formatted(p.ioFullPercent()),
                 p.ioFullPercent(), psiIoFullWarning, psiIoFullCritical, "IO pressure (full)"));
-        results.add(check("psi:memory:full","%.1f%%".formatted(p.memoryFullPercent()),
+        results.add(check("psi:memory:full", "%.1f%%".formatted(p.memoryFullPercent()),
                 p.memoryFullPercent(), psiMemFullWarning, psiMemFullCritical, "Memory pressure (full)"));
 
         return results;
