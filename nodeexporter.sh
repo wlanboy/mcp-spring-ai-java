@@ -5,7 +5,7 @@ CONTAINER_NAME="node-exporter"
 IMAGE="prom/node-exporter:latest"
 
 echo "Pulling image: $IMAGE"
-docker pull "$IMAGE"
+#docker pull "$IMAGE"
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   echo "Removing existing container: $CONTAINER_NAME"
@@ -18,6 +18,8 @@ docker run -d \
   --restart=always \
   --network host \
   --pid host \
-  "$IMAGE"
+  --volume "/:/host/root:ro,rslave" \
+  "$IMAGE" \
+  --path.rootfs=/host/root
 
 echo "Done. Container $CONTAINER_NAME is running."
