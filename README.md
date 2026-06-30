@@ -42,7 +42,7 @@ Drei Anpassungen gegenüber dem generierten Stand:
 </properties>
 ```
 
-**b) Generierten MCP-Starter auf WebFlux-Variante umstellen:**
+**b) Generierten MCP-Starter auf WebMVC oder WebFlux-Variante umstellen:**
 
 Der Initializr erzeugt den Servlet-basierten Starter. Den `artifactId` auf die
 reaktive Variante ändern:
@@ -50,6 +50,9 @@ reaktive Variante ändern:
 ```xml
 <!-- generiert (ersetzen): -->
 <artifactId>spring-ai-starter-mcp-server</artifactId>
+
+<!-- ersetzen durch: -->
+<artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
 
 <!-- ersetzen durch: -->
 <artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
@@ -105,8 +108,10 @@ mitteilt, welche Tools exportiert werden sollen:
 
 ```java
 @Bean
-public ToolCallbackProvider helloWorldTools(HelloWorldTools tools) {
-    return MethodToolCallbackProvider.builder().toolObjects(tools).build();
+public ToolCallbackProvider helloWorldToolProvider(HelloWorldTools helloWorldTools) {
+    return MethodToolCallbackProvider.builder()
+        .toolObjects(helloWorldTools)
+        .build();
 }
 ```
 
