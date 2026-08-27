@@ -6,11 +6,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Service;
 
 @Service
 public class JavaProcessTools {
+
+    private static final Logger log = LoggerFactory.getLogger(JavaProcessTools.class);
 
     record JavaProcessInfo(long pid, String name, double cpuPercent, long ramMb) {}
 
@@ -38,6 +42,7 @@ public class JavaProcessTools {
                     .start();
             return parseJpsOutput(new String(jps.getInputStream().readAllBytes()));
         } catch (Exception e) {
+            log.warn("Failed to list Java processes via 'jps -l': {}", e.getMessage());
             return Map.of();
         }
     }
@@ -51,6 +56,7 @@ public class JavaProcessTools {
                     .start();
             return parsePsOutput(new String(ps.getInputStream().readAllBytes()));
         } catch (Exception e) {
+            log.warn("Failed to read CPU/RAM stats via 'ps' for pids {}: {}", pids, e.getMessage());
             return Map.of();
         }
     }
