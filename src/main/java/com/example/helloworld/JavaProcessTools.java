@@ -1,8 +1,10 @@
 package com.example.helloworld;
 
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Service;
@@ -16,10 +18,14 @@ public class JavaProcessTools {
 
     @Tool(description = "Lists all running Java processes with PID, name, CPU usage (%) and RAM usage (MB)")
     public List<JavaProcessInfo> listJavaProcesses() {
-        return javaProcessNames().entrySet().stream()
+        Map<Long, String> names = javaProcessNames();
+        if (names.isEmpty()) return List.of();
+
+        Map<Long, ProcessStats> stats = readStats(names.keySet());
+        return names.entrySet().stream()
                 .map(e -> {
-                    ProcessStats stats = readStats(e.getKey());
-                    return new JavaProcessInfo(e.getKey(), e.getValue(), stats.cpu(), stats.ramMb());
+                    ProcessStats s = stats.getOrDefault(e.getKey(), new ProcessStats(0.0, 0L));
+                    return new JavaProcessInfo(e.getKey(), e.getValue(), s.cpu(), s.ramMb());
                 })
                 .sorted(Comparator.comparingLong(JavaProcessInfo::pid))
                 .toList();
@@ -36,15 +42,16 @@ public class JavaProcessTools {
         }
     }
 
-    private ProcessStats readStats(long pid) {
+    private Map<Long, ProcessStats> readStats(Set<Long> pids) {
         try {
+            String pidList = pids.stream().map(String::valueOf).collect(Collectors.joining(","));
             Process ps = new ProcessBuilder(
-                    "ps", "-p", String.valueOf(pid), "-o", "%cpu,rss", "--no-headers")
+                    "ps", "-p", pidList, "-o", "pid,%cpu,rss", "--no-headers")
                     .redirectErrorStream(true)
                     .start();
             return parsePsOutput(new String(ps.getInputStream().readAllBytes()));
         } catch (Exception e) {
-            return new ProcessStats(0.0, 0L);
+            return Map.of();
         }
     }
 
@@ -59,12 +66,17 @@ public class JavaProcessTools {
                 ));
     }
 
-    static ProcessStats parsePsOutput(String output) {
-        if (output == null || output.isBlank()) return new ProcessStats(0.0, 0L);
-        String[] parts = output.trim().split("\\s+");
-        return new ProcessStats(
-                Double.parseDouble(parts[0]),
-                Long.parseLong(parts[1]) / 1024
-        );
+    static Map<Long, ProcessStats> parsePsOutput(String output) {
+        Map<Long, ProcessStats> result = new HashMap<>();
+        if (output == null || output.isBlank()) return result;
+        for (String line : output.lines().toList()) {
+            if (line.isBlank()) continue;
+            String[] parts = line.trim().split("\\s+");
+            if (parts.length != 3) continue;
+            result.put(
+                    Long.parseLong(parts[0]),
+                    new ProcessStats(Double.parseDouble(parts[1]), Long.parseLong(parts[2]) / 1024));
+        }
+        return result;
     }
 }

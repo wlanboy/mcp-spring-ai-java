@@ -54,28 +54,39 @@ class JavaProcessToolsTest {
 
     @Test
     void parsePsOutput_parsesCpuAndConvertskbToMb() {
-        JavaProcessTools.ProcessStats stats = JavaProcessTools.parsePsOutput(" 5.2 204800");
+        Map<Long, JavaProcessTools.ProcessStats> result = JavaProcessTools.parsePsOutput(" 198070 5.2 204800");
+        assertThat(result).containsKey(198070L);
+        JavaProcessTools.ProcessStats stats = result.get(198070L);
         assertThat(stats.cpu()).isEqualTo(5.2);
         assertThat(stats.ramMb()).isEqualTo(200L);
     }
 
     @Test
-    void parsePsOutput_returnsZeroForEmptyOutput() {
-        JavaProcessTools.ProcessStats stats = JavaProcessTools.parsePsOutput("");
-        assertThat(stats.cpu()).isEqualTo(0.0);
-        assertThat(stats.ramMb()).isEqualTo(0L);
+    void parsePsOutput_parsesMultipleLines() {
+        String output = """
+                 198070  5.2 204800
+                 198149  0.0   1024
+                """;
+        Map<Long, JavaProcessTools.ProcessStats> result = JavaProcessTools.parsePsOutput(output);
+        assertThat(result).hasSize(2);
+        assertThat(result.get(198070L).cpu()).isEqualTo(5.2);
+        assertThat(result.get(198149L).ramMb()).isEqualTo(1L);
     }
 
     @Test
-    void parsePsOutput_returnsZeroForNullOutput() {
-        JavaProcessTools.ProcessStats stats = JavaProcessTools.parsePsOutput(null);
-        assertThat(stats.cpu()).isEqualTo(0.0);
-        assertThat(stats.ramMb()).isEqualTo(0L);
+    void parsePsOutput_returnsEmptyMapForEmptyOutput() {
+        assertThat(JavaProcessTools.parsePsOutput("")).isEmpty();
+    }
+
+    @Test
+    void parsePsOutput_returnsEmptyMapForNullOutput() {
+        assertThat(JavaProcessTools.parsePsOutput(null)).isEmpty();
     }
 
     @Test
     void parsePsOutput_handlesZeroCpu() {
-        JavaProcessTools.ProcessStats stats = JavaProcessTools.parsePsOutput(" 0.0 1024");
+        Map<Long, JavaProcessTools.ProcessStats> result = JavaProcessTools.parsePsOutput(" 12345 0.0 1024");
+        JavaProcessTools.ProcessStats stats = result.get(12345L);
         assertThat(stats.cpu()).isEqualTo(0.0);
         assertThat(stats.ramMb()).isEqualTo(1L);
     }
