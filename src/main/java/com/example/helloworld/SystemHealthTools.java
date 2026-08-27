@@ -71,13 +71,15 @@ public class SystemHealthTools {
     public List<Anomaly> getSystemAnomalies() throws Exception {
         List<Anomaly> results = new ArrayList<>();
 
-        NodeExporterTools.MemoryStats mem = nodeExporter.getMemoryStats();
+        NodeExporterTools.HealthSnapshot snap = nodeExporter.getHealthSnapshot();
+
+        NodeExporterTools.MemoryStats mem = snap.memory();
         results.add(check(
                 "memory",
                 "%.1f%% (%d/%d MB used)".formatted(mem.usedPercent(), mem.usedMb(), mem.totalMb()),
                 mem.usedPercent(), memoryWarning, memoryCritical, "Memory usage"));
 
-        NodeExporterTools.SwapStats swap = nodeExporter.getSwapStats();
+        NodeExporterTools.SwapStats swap = snap.swap();
         if (swap.totalMb() > 0) {
             results.add(check(
                     "swap",
@@ -85,29 +87,29 @@ public class SystemHealthTools {
                     swap.usedPercent(), swapWarning, swapCritical, "Swap usage"));
         }
 
-        NodeExporterTools.CpuUsage cpu = nodeExporter.getCpuUsage();
+        NodeExporterTools.CpuUsage cpu = snap.cpu();
         results.add(check(
                 "cpu",
                 "%.1f%% (user %.1f%%, system %.1f%%)".formatted(cpu.totalUsedPercent(), cpu.userPercent(), cpu.systemPercent()),
                 cpu.totalUsedPercent(), cpuWarning, cpuCritical, "CPU usage"));
 
-        NodeExporterTools.SystemLoad load = nodeExporter.getSystemLoad();
+        NodeExporterTools.SystemLoad load = snap.load();
         int cores = Runtime.getRuntime().availableProcessors();
         results.add(checkLoad(
                 "load",
                 "%.2f / %.2f / %.2f (cores: %d)".formatted(load.load1(), load.load5(), load.load15(), cores),
                 load.load1(), cores));
 
-        results.addAll(checkDiskSpace());
-        results.addAll(checkTemperatures());
-        results.addAll(checkPressure());
+        results.addAll(checkDiskSpace(snap.diskSpace()));
+        results.addAll(checkTemperatures(snap.temperatures()));
+        results.addAll(checkPressure(snap.pressure()));
 
         return results;
     }
 
-    private List<Anomaly> checkDiskSpace() throws Exception {
+    private List<Anomaly> checkDiskSpace(List<NodeExporterTools.DiskSpace> disks) {
         List<Anomaly> results = new ArrayList<>();
-        for (NodeExporterTools.DiskSpace disk : nodeExporter.getDiskSpace()) {
+        for (NodeExporterTools.DiskSpace disk : disks) {
             results.add(check(
                     "disk:" + disk.mountPoint(),
                     "%.1f%% (%d/%d GB used)".formatted(disk.usedPercent(), disk.usedGb(), disk.totalGb()),
@@ -120,8 +122,7 @@ public class SystemHealthTools {
         return results;
     }
 
-    private List<Anomaly> checkPressure() throws Exception {
-        NodeExporterTools.PressureStats p = nodeExporter.getPressureStats();
+    private List<Anomaly> checkPressure(NodeExporterTools.PressureStats p) {
         List<Anomaly> results = new ArrayList<>();
 
         results.add(check("psi:cpu:some",    "%.1f%%".formatted(p.cpuSomePercent()),
@@ -134,9 +135,9 @@ public class SystemHealthTools {
         return results;
     }
 
-    private List<Anomaly> checkTemperatures() throws Exception {
+    private List<Anomaly> checkTemperatures(List<NodeExporterTools.Temperature> temperatures) {
         List<Anomaly> results = new ArrayList<>();
-        for (NodeExporterTools.Temperature t : nodeExporter.getTemperatures()) {
+        for (NodeExporterTools.Temperature t : temperatures) {
             if (t.critCelsius() <= 0) continue;
             double pct = t.celsius() / t.critCelsius() * 100;
             String value = "%.1f°C (crit: %.1f°C)".formatted(t.celsius(), t.critCelsius());

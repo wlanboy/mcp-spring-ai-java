@@ -54,6 +54,15 @@ public class NodeExporterTools {
 
     record SystemInfo(String hostname, String kernel, String os, String machine) {}
 
+    record HealthSnapshot(
+            MemoryStats memory,
+            SwapStats swap,
+            CpuUsage cpu,
+            SystemLoad load,
+            List<DiskSpace> diskSpace,
+            List<Temperature> temperatures,
+            PressureStats pressure) {}
+
     private static final Set<String> VIRTUAL_FS = Set.of(
             "proc", "sysfs", "devtmpfs", "cgroup", "cgroup2", "overlay",
             "nsfs", "autofs", "binfmt_misc", "tracefs", "debugfs", "configfs",
@@ -79,7 +88,11 @@ public class NodeExporterTools {
         Map<String, Map<String, Double>> first = fetchCpuSeconds();
         Thread.sleep(1000);
         Map<String, Map<String, Double>> second = fetchCpuSeconds();
+        return computeCpuUsage(first, second);
+    }
 
+    private static CpuUsage computeCpuUsage(
+            Map<String, Map<String, Double>> first, Map<String, Map<String, Double>> second) {
         double user = 0, system = 0, idle = 0, total = 0;
         for (String cpu : first.keySet()) {
             Map<String, Double> f = first.get(cpu);
@@ -151,7 +164,10 @@ public class NodeExporterTools {
         Thread.sleep(1000);
         Map<String, Double> second = fetchScalars();
         double elapsed = (System.nanoTime() - t0) / 1_000_000_000.0;
+        return computePressureStats(first, second, elapsed);
+    }
 
+    private static PressureStats computePressureStats(Map<String, Double> first, Map<String, Double> second, double elapsed) {
         return new PressureStats(
                 psiPercent(first, second, "node_pressure_cpu_waiting_seconds_total", elapsed),
                 psiPercent(first, second, "node_pressure_io_waiting_seconds_total", elapsed),
@@ -163,6 +179,35 @@ public class NodeExporterTools {
     @Tool(description = "Returns system information: hostname, kernel version, OS type and machine architecture")
     public SystemInfo getSystemInfo() throws Exception {
         return parseSystemInfo(fetchRaw());
+    }
+
+    /**
+     * Fetches one before/after metrics pair (single 1s window) and derives memory, swap, CPU,
+     * load, disk space, temperature and PSI pressure from it — used by health checks that need
+     * several metric categories at once, instead of each metric issuing its own HTTP round trip
+     * and delta-measurement sleep.
+     */
+    public HealthSnapshot getHealthSnapshot() throws Exception {
+        String beforeRaw = fetchRaw();
+        long t0 = System.nanoTime();
+        Thread.sleep(1000);
+        String afterRaw = fetchRaw();
+        double elapsed = (System.nanoTime() - t0) / 1_000_000_000.0;
+
+        Map<String, Double> scalarsBefore = parseScalars(beforeRaw);
+        Map<String, Double> scalarsAfter = parseScalars(afterRaw);
+
+        CpuUsage cpu = computeCpuUsage(parseCpuSeconds(beforeRaw), parseCpuSeconds(afterRaw));
+        PressureStats pressure = computePressureStats(scalarsBefore, scalarsAfter, elapsed);
+
+        return new HealthSnapshot(
+                parseMemory(scalarsAfter),
+                parseSwap(scalarsAfter),
+                cpu,
+                parseLoad(scalarsAfter),
+                parseDiskSpace(afterRaw),
+                parseTemperatures(afterRaw),
+                pressure);
     }
 
     // ── Static parse methods (package-private for unit tests) ──────────────
@@ -322,8 +367,12 @@ public class NodeExporterTools {
     }
 
     private Map<String, Map<String, Double>> fetchCpuSeconds() throws Exception {
+        return parseCpuSeconds(fetchRaw());
+    }
+
+    private static Map<String, Map<String, Double>> parseCpuSeconds(String raw) {
         Map<String, Map<String, Double>> result = new HashMap<>();
-        for (String line : fetchRaw().lines().toList()) {
+        for (String line : raw.lines().toList()) {
             if (!line.startsWith("node_cpu_seconds_total{")) continue;
             result.computeIfAbsent(extractLabel(line, "cpu"), k -> new HashMap<>())
                     .put(extractLabel(line, "mode"), extractValue(line));
@@ -332,8 +381,12 @@ public class NodeExporterTools {
     }
 
     private Map<String, Double> fetchScalars() throws Exception {
+        return parseScalars(fetchRaw());
+    }
+
+    private static Map<String, Double> parseScalars(String raw) {
         Map<String, Double> result = new HashMap<>();
-        for (String line : fetchRaw().lines().toList()) {
+        for (String line : raw.lines().toList()) {
             if (line.startsWith("#") || line.isBlank() || line.contains("{")) continue;
             int space = line.indexOf(' ');
             if (space < 0) continue;
