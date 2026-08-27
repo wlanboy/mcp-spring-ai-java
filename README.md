@@ -1,11 +1,16 @@
-# MCP Hello World Server — Spring AI / Java 25
+# MCP System-Monitoring Server — Spring AI / Java 25
 
-Ein minimaler MCP-Server (Model Context Protocol) auf Basis von Spring Boot 4 und Spring AI 2.0.
+Ein MCP-Server (Model Context Protocol) auf Basis von Spring Boot 4 und Spring AI 2.0.
+Neben einem Hello-World-Beispiel stellt er reale System-Monitoring-Tools bereit: laufende
+Java-Prozesse, Host-Metriken über den Prometheus `node_exporter` sowie eine aggregierte
+Health-Check-Auswertung mit konfigurierbaren Schwellwerten.
 
 ## Voraussetzungen
 
 - Java 25
 - Maven 3.9+
+- Docker (optional, nur für [`nodeexporter.sh`](nodeexporter.sh) — Voraussetzung für alle
+  `NodeExporterTools`- und `SystemHealthTools`-Tools)
 
 ## Arbeitsschritte
 
@@ -13,7 +18,7 @@ Ein minimaler MCP-Server (Model Context Protocol) auf Basis von Spring Boot 4 un
 
 ```bash
 curl -s -o spring-init.zip "https://start.spring.io/starter.zip?\
-type=maven-project&language=java&bootVersion=4.1.0\
+type=maven-project&language=java&bootVersion=4.1.1\
 &groupId=com.example&artifactId=helloworld\
 &packageName=com.example.helloworld&javaVersion=25\
 &dependencies=configuration-processor,spring-ai-mcp-server,webflux"
@@ -54,14 +59,17 @@ reaktive Variante ändern:
 <!-- ersetzen durch: -->
 <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
 
-<!-- ersetzen durch: -->
+<!-- oder ersetzen durch: -->
 <artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
 ```
 
 Der Starter zieht WebFlux, Reactor und den MCP-Protokollstack selbst mit —
 `spring-boot-starter-webflux` muss nicht separat eingetragen werden.
 
-**c) Spring Milestones Repository** (da M8 noch kein GA-Release ist):
+Aktuell im Projekt verwendet: `spring-boot-starter-parent` `4.1.1`,
+`spring-ai-starter-mcp-server-webflux` `2.0.1` (GA-Release).
+
+**c) Spring Milestones Repository:**
 
 ```xml
 <repositories>
@@ -74,14 +82,18 @@ Der Starter zieht WebFlux, Reactor und den MCP-Protokollstack selbst mit —
 </repositories>
 ```
 
+> **Hinweis:** Dieses Repository war ursprünglich für Meilenstein-Builds von Spring AI
+> nötig. Seit dem GA-Release `2.0.1` bezieht das Projekt alle Dependencies bereits aus
+> Maven Central; das Repository ist in der `pom.xml` weiterhin vorhanden, wird aber
+> aktuell nicht mehr zwingend benötigt.
 
 ---
 
-### 3. Tool-Klasse erstellen (`HelloWorldTools.java`)
+### 3. Tool-Klassen erstellen
 
-MCP-Tools sind einfache Spring-Beans, deren Methoden mit `@Tool` annotiert
-werden. Die `description` erscheint im MCP-Toolkatalog und wird vom
-KI-Modell für die Tool-Auswahl genutzt.
+MCP-Tools sind einfache Spring-Beans, deren Methoden mit `@Tool` annotiert werden.
+Die `description` erscheint im MCP-Toolkatalog und wird vom KI-Modell für die
+Tool-Auswahl genutzt. Minimalbeispiel (`HelloWorldTools.java`):
 
 ```java
 @Service
@@ -99,18 +111,25 @@ public class HelloWorldTools {
 }
 ```
 
+Das Projekt enthält daneben drei weitere Tool-Klassen mit insgesamt 13 zusätzlichen
+Tools — siehe [Verfügbare Tools](#verfügbare-tools) weiter unten.
+
 ---
 
 ### 4. Tools als Bean registrieren (`HelloworldApplication.java`)
 
-Spring AI benötigt einen `ToolCallbackProvider`-Bean, der dem MCP-Server
-mitteilt, welche Tools exportiert werden sollen:
+Spring AI benötigt einen `ToolCallbackProvider`-Bean, der dem MCP-Server mitteilt,
+welche Tools exportiert werden sollen. Alle Tool-Beans werden hier gebündelt:
 
 ```java
 @Bean
-public ToolCallbackProvider helloWorldToolProvider(HelloWorldTools helloWorldTools) {
+public ToolCallbackProvider helloWorldToolCallbacks(
+        HelloWorldTools helloWorldTools,
+        JavaProcessTools javaProcessTools,
+        NodeExporterTools nodeExporterTools,
+        SystemHealthTools systemHealthTools) {
     return MethodToolCallbackProvider.builder()
-        .toolObjects(helloWorldTools)
+        .toolObjects(helloWorldTools, javaProcessTools, nodeExporterTools, systemHealthTools)
         .build();
 }
 ```
@@ -127,14 +146,62 @@ spring.ai.mcp.server.version=1.0.0
 spring.ai.mcp.server.type=ASYNC
 
 server.port=8080
+
+# URL des Prometheus node_exporter (siehe Abschnitt "Node Exporter starten")
+node-exporter.url=http://localhost:9100/metrics
+
+# Schwellwerte für SystemHealthTools#getSystemAnomalies (Prozent, sofern nicht anders angegeben)
+health.threshold.cpu.warning=70
+health.threshold.cpu.critical=90
+health.threshold.memory.warning=80
+health.threshold.memory.critical=90
+health.threshold.swap.warning=70
+health.threshold.swap.critical=90
+health.threshold.disk.warning=80
+health.threshold.disk.critical=90
+# Temperatur-Schwellwerte als Prozentsatz des sensoreigenen kritischen Werts
+health.threshold.temperature.warning=80
+health.threshold.temperature.critical=95
+# PSI-Schwellwerte in Prozent gestallter/wartender Zeit pro 1-Sekunden-Fenster
+health.threshold.psi.cpu.some.warning=30
+health.threshold.psi.cpu.some.critical=70
+health.threshold.psi.io.full.warning=5
+health.threshold.psi.io.full.critical=20
+health.threshold.psi.memory.full.warning=1
+health.threshold.psi.memory.full.critical=10
 ```
 
 - `type=ASYNC` aktiviert den reaktiven SSE-Transport (passend zu WebFlux).
 - `name` und `version` erscheinen im MCP-Handshake.
+- `node-exporter.url` zeigt auf den `/metrics`-Endpunkt eines laufenden `node_exporter`
+  (Default: `http://localhost:9100/metrics`, siehe unten).
+- Alle `health.threshold.*`-Werte haben Defaults im Code (`@Value("...:default")`) und
+  müssen nicht zwingend gesetzt werden.
 
 ---
 
-### 6. Server starten
+### 6. Node Exporter starten
+
+`NodeExporterTools` und darauf aufbauend `SystemHealthTools` benötigen einen laufenden
+Prometheus `node_exporter` als Metrik-Quelle. [`nodeexporter.sh`](nodeexporter.sh) startet
+ihn als Docker-Container mit Host-Netzwerk und Zugriff auf das Host-Root-Dateisystem
+(read-only):
+
+```bash
+./nodeexporter.sh
+```
+
+Das Skript entfernt einen evtl. vorhandenen Container namens `node-exporter`, startet
+`prom/node-exporter:latest` neu mit `--restart=always` und mountet `/` read-only nach
+`/host/root`. Danach ist der Endpunkt unter `http://localhost:9100/metrics` erreichbar.
+
+Ohne laufenden `node_exporter` schlagen alle `NodeExporterTools`- und
+`SystemHealthTools`-Aufrufe mit einem HTTP-Fehler fehl; `HelloWorldTools` und
+`JavaProcessTools` sind davon unabhängig nutzbar.
+
+---
+
+### 7. Server starten
 
 ```bash
 ./mvnw spring-boot:run
@@ -144,7 +211,19 @@ Der Server lauscht auf `http://localhost:8080`.
 
 ---
 
-### 7. MCP-Endpunkte testen
+### 8. Tests ausführen
+
+```bash
+./mvnw test
+```
+
+Deckt alle vier Tool-Klassen sowie den Application-Context-Start ab
+(`HelloWorldToolsTest`, `JavaProcessToolsTest`, `NodeExporterToolsTest`,
+`SystemHealthToolsTest`, `HelloworldApplicationTests`).
+
+---
+
+### 9. MCP-Endpunkte testen
 
 #### Automatisiert mit `curl-test.sh`
 
@@ -194,31 +273,9 @@ Session endpoint: /mcp/message?sessionId=003c8063-07bb-49a3-ac42-95e048a10f3a
     "jsonrpc": "2.0",
     "id": 2,
     "result": {
-        "tools": [
-            {
-                "name": "greet",
-                "description": "Returns a greeting message for the given name",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": { "name": { "type": "string" } },
-                    "required": ["name"]
-                }
-            },
-            {
-                "name": "serverTime",
-                "description": "Returns the current server time as ISO-8601 string",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
-        ]
+        "tools": [ ... 17 Tools ... ]
     }
 }
-  Verfügbare Tools:
-    - greet: Returns a greeting message for the given name
-    - serverTime: Returns the current server time as ISO-8601 string
 
 [tools/call greet]
 {
@@ -249,11 +306,66 @@ Der Server-URL kann über die Umgebungsvariable `MCP_SERVER` überschrieben werd
 MCP_SERVER=http://myserver:9090 ./curl-test.sh
 ```
 
+#### Automatisiert mit `curl-java-test.sh`
+
+```bash
+./curl-java-test.sh
+```
+
+Führt denselben Handshake wie `curl-test.sh` durch und ruft anschließend
+`tools/call listJavaProcesses` auf. Die zurückgegebene Prozessliste wird als
+formatierte Tabelle (PID, Name, CPU %, RAM MB) ausgegeben. Respektiert ebenfalls
+`MCP_SERVER`.
+
 #### Manuell — SSE-Stream direkt beobachten
 
 ```bash
 curl -N http://localhost:8080/sse
 ```
+
+---
+
+## Verfügbare Tools
+
+### HelloWorldTools
+
+| Tool | Beschreibung |
+|---|---|
+| `greet(name)` | Begrüßung für den übergebenen Namen (validiert: nicht leer, max. 100 Zeichen) |
+| `serverTime()` | Aktuelle Serverzeit als ISO-8601-String |
+
+### JavaProcessTools
+
+| Tool | Beschreibung |
+|---|---|
+| `listJavaProcesses()` | Alle laufenden Java-Prozesse mit PID, Name, CPU % und RAM (MB), via `jps`/`ps` |
+
+### NodeExporterTools
+
+*Benötigt einen laufenden `node_exporter`, siehe [Node Exporter starten](#6-node-exporter-starten).*
+
+| Tool | Beschreibung |
+|---|---|
+| `getMemoryStats()` | RAM: total, verfügbar, belegt (MB) + Prozent |
+| `getSwapStats()` | Swap: total, frei, belegt (MB) + Prozent |
+| `getSystemLoad()` | Load Average für 1/5/15 Minuten |
+| `getCpuUsage()` | CPU-Auslastung (user/system/idle) über 1 Sekunde gemessen, alle Kerne |
+| `getNetworkStats()` | Netzwerktraffic (MB empfangen/gesendet) pro Interface |
+| `getSystemUptime()` | Uptime seit letztem Boot (Stunden/Minuten) |
+| `getDiskActivity()` | Disk-I/O (MB/s Lesen/Schreiben) pro Gerät, über 1 Sekunde gemessen |
+| `getDiskSpace()` | Speicherplatz pro Dateisystem (Mountpoint, Device, Typ, GB, Prozent); virtuelle Dateisysteme ausgeschlossen |
+| `getNetworkErrors()` | Kumulative Netzwerkfehler/-drops pro Interface seit Systemstart |
+| `getTemperatures()` | Hardware-Temperaturen (°C) je Sensor inkl. kritischem Schwellwert, absteigend sortiert |
+| `getPressureStats()` | Linux PSI (Pressure Stall Information) für CPU/IO/Memory, über 1 Sekunde gemessen |
+| `getSystemInfo()` | Hostname, Kernel-Version, OS-Typ, Architektur |
+
+### SystemHealthTools
+
+*Baut auf `NodeExporterTools` auf, benötigt ebenfalls einen laufenden `node_exporter`.*
+
+| Tool | Beschreibung |
+|---|---|
+| `getSystemAnomalies()` | Prüft CPU, Memory, Swap, Diskspace, System Load, Temperaturen und PSI gegen die in `application.properties` konfigurierten Schwellwerte. Liefert je Metrik einen Befund mit Severity `OK`/`WARNING`/`CRITICAL`. |
 
 ---
 
@@ -268,5 +380,4 @@ curl -N http://localhost:8080/sse
     }
   }
 }
-
-``` 
+```
