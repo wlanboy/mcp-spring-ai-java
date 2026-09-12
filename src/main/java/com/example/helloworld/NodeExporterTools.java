@@ -11,7 +11,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.springframework.ai.tool.annotation.Tool;
+import tools.jackson.databind.ObjectMapper;
+import org.springframework.ai.mcp.annotation.McpResource;
+import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.ai.mcp.annotation.context.McpSyncRequestContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +27,12 @@ public class NodeExporterTools {
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(3))
             .build();
+
+    private final ObjectMapper objectMapper;
+
+    public NodeExporterTools(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     record MemoryStats(long totalMb, long availableMb, long usedMb, double usedPercent) {}
 
@@ -68,26 +77,37 @@ public class NodeExporterTools {
             "nsfs", "autofs", "binfmt_misc", "tracefs", "debugfs", "configfs",
             "fusectl", "hugetlbfs", "mqueue", "pstore", "securityfs", "efivarfs");
 
-    @Tool(description = "Returns system memory stats: total, available and used in MB plus usage percentage")
+    // All NodeExporterTools tools are read-only scrapes of the local node_exporter endpoint:
+    // readOnlyHint/idempotentHint = true, destructiveHint = false, openWorldHint = false.
+    @McpTool(description = "Returns system memory stats: total, available and used in MB plus usage percentage",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public MemoryStats getMemoryStats() throws Exception {
         return parseMemory(fetchScalars());
     }
 
-    @Tool(description = "Returns swap space stats: total, free and used in MB plus usage percentage")
+    @McpTool(description = "Returns swap space stats: total, free and used in MB plus usage percentage",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public SwapStats getSwapStats() throws Exception {
         return parseSwap(fetchScalars());
     }
 
-    @Tool(description = "Returns system load averages for the last 1, 5 and 15 minutes")
+    @McpTool(description = "Returns system load averages for the last 1, 5 and 15 minutes",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public SystemLoad getSystemLoad() throws Exception {
         return parseLoad(fetchScalars());
     }
 
-    @Tool(description = "Returns CPU usage in percent (user, system, idle) measured over 1 second across all cores")
-    public CpuUsage getCpuUsage() throws Exception {
+    @McpTool(description = "Returns CPU usage in percent (user, system, idle) measured over 1 second across all cores",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
+    public CpuUsage getCpuUsage(McpSyncRequestContext ctx) throws Exception {
+        // Report progress/logging for the 1s sampling window via the MCP request context.
+        ctx.info("Measuring CPU usage over a 1s sampling window");
+        ctx.progress(0);
         Map<String, Map<String, Double>> first = fetchCpuSeconds();
+        ctx.progress(50);
         Thread.sleep(1000);
         Map<String, Map<String, Double>> second = fetchCpuSeconds();
+        ctx.progress(100);
         return computeCpuUsage(first, second);
     }
 
@@ -116,21 +136,28 @@ public class NodeExporterTools {
                 round((total - idleFinal) / total * 100));
     }
 
-    @Tool(description = "Returns network traffic in MB received and transmitted per network interface")
+    @McpTool(description = "Returns network traffic in MB received and transmitted per network interface",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public List<NetworkInterface> getNetworkStats() throws Exception {
         return parseNetwork(fetchRaw());
     }
 
-    @Tool(description = "Returns system uptime since last boot as hours and minutes")
+    @McpTool(description = "Returns system uptime since last boot as hours and minutes",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public String getSystemUptime() throws Exception {
         return parseUptime(fetchScalars(), Instant.now().getEpochSecond());
     }
 
-    @Tool(description = "Returns disk read and write activity in MB/s per device, measured over 1 second")
-    public List<DiskActivity> getDiskActivity() throws Exception {
+    @McpTool(description = "Returns disk read and write activity in MB/s per device, measured over 1 second",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
+    public List<DiskActivity> getDiskActivity(McpSyncRequestContext ctx) throws Exception {
+        ctx.info("Measuring disk activity over a 1s sampling window");
+        ctx.progress(0);
         Map<String, double[]> first = fetchDiskBytes();
+        ctx.progress(50);
         Thread.sleep(1000);
         Map<String, double[]> second = fetchDiskBytes();
+        ctx.progress(100);
 
         List<DiskActivity> result = new ArrayList<>();
         for (String device : first.keySet()) {
@@ -142,28 +169,36 @@ public class NodeExporterTools {
         return result;
     }
 
-    @Tool(description = "Returns disk space per filesystem: mount point, device, type, total/available/used in GB and usage percent. Excludes virtual filesystems.")
+    @McpTool(description = "Returns disk space per filesystem: mount point, device, type, total/available/used in GB and usage percent. Excludes virtual filesystems.",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public List<DiskSpace> getDiskSpace() throws Exception {
         return parseDiskSpace(fetchRaw());
     }
 
-    @Tool(description = "Returns cumulative network errors and packet drops per interface since system boot")
+    @McpTool(description = "Returns cumulative network errors and packet drops per interface since system boot",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public List<NetworkErrors> getNetworkErrors() throws Exception {
         return parseNetworkErrors(fetchRaw());
     }
 
-    @Tool(description = "Returns hardware temperatures in Celsius per sensor with critical threshold. Sorted by temperature descending.")
+    @McpTool(description = "Returns hardware temperatures in Celsius per sensor with critical threshold. Sorted by temperature descending.",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public List<Temperature> getTemperatures() throws Exception {
         return parseTemperatures(fetchRaw());
     }
 
-    @Tool(description = "Returns Linux PSI (Pressure Stall Information) as percent of time the system was stalled on CPU, IO or memory, measured over 1 second. 'full' means ALL tasks were blocked.")
-    public PressureStats getPressureStats() throws Exception {
+    @McpTool(description = "Returns Linux PSI (Pressure Stall Information) as percent of time the system was stalled on CPU, IO or memory, measured over 1 second. 'full' means ALL tasks were blocked.",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
+    public PressureStats getPressureStats(McpSyncRequestContext ctx) throws Exception {
+        ctx.info("Measuring PSI pressure over a 1s sampling window");
+        ctx.progress(0);
         Map<String, Double> first = fetchScalars();
         long t0 = System.nanoTime();
+        ctx.progress(50);
         Thread.sleep(1000);
         Map<String, Double> second = fetchScalars();
         double elapsed = (System.nanoTime() - t0) / 1_000_000_000.0;
+        ctx.progress(100);
         return computePressureStats(first, second, elapsed);
     }
 
@@ -176,9 +211,13 @@ public class NodeExporterTools {
                 psiPercent(first, second, "node_pressure_memory_stalled_seconds_total", elapsed));
     }
 
-    @Tool(description = "Returns system information: hostname, kernel version, OS type and machine architecture")
-    public SystemInfo getSystemInfo() throws Exception {
-        return parseSystemInfo(fetchRaw());
+    // Static, read-only host info fits an MCP Resource better than a Tool a client "calls" -
+    // exposed under a stable URI instead of a tool name. Serialized to JSON explicitly since
+    // the resource converter only special-cases String/List<String>/ResourceContents returns.
+    @McpResource(uri = "system://info", name = "System Info", mimeType = "application/json",
+            description = "System information: hostname, kernel version, OS type and machine architecture")
+    public String getSystemInfo() throws Exception {
+        return objectMapper.writeValueAsString(parseSystemInfo(fetchRaw()));
     }
 
     /**

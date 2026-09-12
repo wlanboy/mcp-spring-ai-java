@@ -1,14 +1,18 @@
 package com.example.helloworld;
 
 import java.time.Instant;
-import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Service;
 
 @Service
 public class HelloWorldTools {
 
-    @Tool(description = "Returns a greeting message for the given name")
-    public String greet(String name) {
+    // Both tools are pure, side-effect-free lookups: readOnlyHint/idempotentHint = true,
+    // destructiveHint = false, openWorldHint = false (no external/unpredictable systems involved).
+    @McpTool(description = "Returns a greeting message for the given name",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
+    public String greet(@McpToolParam(description = "Name to greet", required = true) String name) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("name must not be blank");
         }
@@ -18,7 +22,8 @@ public class HelloWorldTools {
         return "Hello, %s! Welcome to the MCP Hello World Server.".formatted(name.strip());
     }
 
-    @Tool(description = "Returns the current server time as ISO-8601 string")
+    @McpTool(description = "Returns the current server time as ISO-8601 string",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public String serverTime() {
         return Instant.now().toString();
     }

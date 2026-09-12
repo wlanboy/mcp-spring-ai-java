@@ -8,7 +8,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -20,7 +20,10 @@ public class JavaProcessTools {
 
     record ProcessStats(double cpu, long ramMb) {}
 
-    @Tool(description = "Lists all running Java processes with PID, name, CPU usage (%) and RAM usage (MB)")
+    // Spawns jps/ps but only reads process state: readOnlyHint/idempotentHint = true,
+    // destructiveHint = false, openWorldHint = false (local processes only).
+    @McpTool(description = "Lists all running Java processes with PID, name, CPU usage (%) and RAM usage (MB)",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public List<JavaProcessInfo> listJavaProcesses() {
         Map<Long, String> names = javaProcessNames();
         if (names.isEmpty()) return List.of();

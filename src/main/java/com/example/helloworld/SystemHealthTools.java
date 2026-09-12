@@ -2,7 +2,8 @@ package com.example.helloworld;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.ai.mcp.annotation.context.McpSyncRequestContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -67,11 +68,19 @@ public class SystemHealthTools {
 
     record Anomaly(String metric, String value, Severity severity, String message) {}
 
-    @Tool(description = "Checks CPU, memory, swap, disk space, system load, hardware temperatures and Linux PSI pressure for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.")
-    public List<Anomaly> getSystemAnomalies() throws Exception {
+    // Read-only aggregated health check: readOnlyHint/idempotentHint = true,
+    // destructiveHint = false, openWorldHint = false.
+    @McpTool(description = "Checks CPU, memory, swap, disk space, system load, hardware temperatures and Linux PSI pressure for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
+    public List<Anomaly> getSystemAnomalies(McpSyncRequestContext ctx) throws Exception {
         List<Anomaly> results = new ArrayList<>();
 
+        // getHealthSnapshot() itself blocks for ~1s (before/after metrics sample) - report
+        // that as progress since this is the longest-running tool in the server.
+        ctx.info("Collecting a full health snapshot (memory, swap, CPU, load, disk, temperature, PSI)");
+        ctx.progress(0);
         NodeExporterTools.HealthSnapshot snap = nodeExporter.getHealthSnapshot();
+        ctx.progress(100);
 
         NodeExporterTools.MemoryStats mem = snap.memory();
         results.add(check(
