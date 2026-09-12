@@ -78,9 +78,9 @@ public class SystemHealthTools {
         // getHealthSnapshot() itself blocks for ~1s (before/after metrics sample) - report
         // that as progress since this is the longest-running tool in the server.
         ctx.info("Collecting a full health snapshot (memory, swap, CPU, load, disk, temperature, PSI)");
-        ctx.progress(0);
+        ctx.progress(p -> p.progress(0).total(1.0).message("Collecting health snapshot"));
         NodeExporterTools.HealthSnapshot snap = nodeExporter.getHealthSnapshot();
-        ctx.progress(100);
+        ctx.progress(p -> p.progress(1.0).total(1.0).message("Done"));
 
         NodeExporterTools.MemoryStats mem = snap.memory();
         results.add(check(

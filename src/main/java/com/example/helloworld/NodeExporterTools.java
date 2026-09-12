@@ -101,13 +101,15 @@ public class NodeExporterTools {
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public CpuUsage getCpuUsage(McpSyncRequestContext ctx) throws Exception {
         // Report progress/logging for the 1s sampling window via the MCP request context.
+        // Always set .message(...) explicitly - the bare percentage overload omits it, which
+        // some clients reject when building the progress notification.
         ctx.info("Measuring CPU usage over a 1s sampling window");
-        ctx.progress(0);
+        ctx.progress(p -> p.progress(0).total(1.0).message("Capturing first CPU sample"));
         Map<String, Map<String, Double>> first = fetchCpuSeconds();
-        ctx.progress(50);
+        ctx.progress(p -> p.progress(0.5).total(1.0).message("Waiting 1s before second sample"));
         Thread.sleep(1000);
         Map<String, Map<String, Double>> second = fetchCpuSeconds();
-        ctx.progress(100);
+        ctx.progress(p -> p.progress(1.0).total(1.0).message("Done"));
         return computeCpuUsage(first, second);
     }
 
@@ -152,12 +154,12 @@ public class NodeExporterTools {
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public List<DiskActivity> getDiskActivity(McpSyncRequestContext ctx) throws Exception {
         ctx.info("Measuring disk activity over a 1s sampling window");
-        ctx.progress(0);
+        ctx.progress(p -> p.progress(0).total(1.0).message("Capturing first disk I/O sample"));
         Map<String, double[]> first = fetchDiskBytes();
-        ctx.progress(50);
+        ctx.progress(p -> p.progress(0.5).total(1.0).message("Waiting 1s before second sample"));
         Thread.sleep(1000);
         Map<String, double[]> second = fetchDiskBytes();
-        ctx.progress(100);
+        ctx.progress(p -> p.progress(1.0).total(1.0).message("Done"));
 
         List<DiskActivity> result = new ArrayList<>();
         for (String device : first.keySet()) {
@@ -191,14 +193,14 @@ public class NodeExporterTools {
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
     public PressureStats getPressureStats(McpSyncRequestContext ctx) throws Exception {
         ctx.info("Measuring PSI pressure over a 1s sampling window");
-        ctx.progress(0);
+        ctx.progress(p -> p.progress(0).total(1.0).message("Capturing first PSI sample"));
         Map<String, Double> first = fetchScalars();
         long t0 = System.nanoTime();
-        ctx.progress(50);
+        ctx.progress(p -> p.progress(0.5).total(1.0).message("Waiting 1s before second sample"));
         Thread.sleep(1000);
         Map<String, Double> second = fetchScalars();
         double elapsed = (System.nanoTime() - t0) / 1_000_000_000.0;
-        ctx.progress(100);
+        ctx.progress(p -> p.progress(1.0).total(1.0).message("Done"));
         return computePressureStats(first, second, elapsed);
     }
 
