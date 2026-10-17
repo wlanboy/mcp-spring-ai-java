@@ -195,6 +195,12 @@ Das Skript entfernt einen evtl. vorhandenen Container namens `node-exporter`, st
 `prom/node-exporter:latest` neu mit `--restart=always` und mountet `/` read-only nach
 `/host/root`. Danach ist der Endpunkt unter `http://localhost:9100/metrics` erreichbar.
 
+Zum Stoppen und Entfernen des Containers dient [`nodeexporter-delete.sh`](nodeexporter-delete.sh):
+
+```bash
+./nodeexporter-delete.sh
+```
+
 Ohne laufenden `node_exporter` schlagen alle `NodeExporterTools`- und
 `SystemHealthTools`-Aufrufe mit einem HTTP-Fehler fehl; `HelloWorldTools` und
 `JavaProcessTools` sind davon unabhängig nutzbar.
@@ -208,6 +214,22 @@ Ohne laufenden `node_exporter` schlagen alle `NodeExporterTools`- und
 ```
 
 Der Server lauscht auf `http://localhost:8080`.
+
+#### Alternativ: Docker Compose (MCP-Server + Node Exporter)
+
+[`docker-compose.yml`](docker-compose.yml) startet `node-exporter` (wie in
+[`nodeexporter.sh`](nodeexporter.sh) im Host-Netzwerk) und den MCP-Server, gebaut aus dem
+[`Dockerfile`](Dockerfile) (einfaches Fat-JAR, ohne Layers/AOT):
+
+```bash
+docker compose up -d --build
+docker compose down
+```
+
+Der MCP-Server ist unter `http://localhost:8080` erreichbar und erreicht den Node Exporter
+über `host.docker.internal:9100` (gesetzt über die Umgebungsvariable `NODEEXPORTER_URL`).
+`listJavaProcesses` liefert im Container eine leere Liste, da das Runtime-Image weder `jps`
+noch `ps` enthält und nur die Prozesse des eigenen Containers sieht.
 
 ---
 
