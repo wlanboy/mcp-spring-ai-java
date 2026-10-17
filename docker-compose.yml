@@ -1,0 +1,26 @@
+services:
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: always
+    network_mode: host
+    pid: host
+    volumes:
+      - "/:/host/root:ro,rslave"
+    command:
+      - "--path.rootfs=/host/root"
+
+  mcp-server:
+    build: .
+    image: mcp-spring-ai-java:latest
+    container_name: mcp-server
+    restart: unless-stopped
+    depends_on:
+      - node-exporter
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # node-exporter laeuft im Host-Netzwerk, daher Zugriff ueber das Host-Gateway
+      NODEEXPORTER_URL: "http://host.docker.internal:9100/metrics"
