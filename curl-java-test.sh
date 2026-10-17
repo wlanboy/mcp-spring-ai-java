@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-SERVER="${MCP_SERVER:-http://localhost:8080}"
+SERVER="${MCP_SERVER:-http://localhost:8099}"
 SSE_LOG=$(mktemp /tmp/mcp-sse-XXXX.log)
 
 cleanup() {

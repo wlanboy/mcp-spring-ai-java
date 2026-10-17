@@ -21,6 +21,6 @@ WORKDIR /app
 COPY --from=build --chown=185:185 /home/default/app/target/helloworld-0.0.1-SNAPSHOT.jar app.jar
 
 USER 185
-EXPOSE 8080
+EXPOSE 8099
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

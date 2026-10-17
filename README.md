@@ -145,7 +145,7 @@ spring.ai.mcp.server.name=hello-world-mcp
 spring.ai.mcp.server.version=1.0.0
 spring.ai.mcp.server.type=ASYNC
 
-server.port=8080
+server.port=8099
 
 # URL des Prometheus node_exporter (siehe Abschnitt "Node Exporter starten")
 node-exporter.url=http://localhost:9100/metrics
@@ -213,7 +213,7 @@ Ohne laufenden `node_exporter` schlagen alle `NodeExporterTools`- und
 ./mvnw spring-boot:run
 ```
 
-Der Server lauscht auf `http://localhost:8080`.
+Der Server lauscht auf `http://localhost:8099`.
 
 #### Alternativ: Docker Compose (MCP-Server + Node Exporter)
 
@@ -226,7 +226,7 @@ docker compose up -d --build
 docker compose down
 ```
 
-Der MCP-Server ist unter `http://localhost:8080` erreichbar und erreicht den Node Exporter
+Der MCP-Server ist unter `http://localhost:8099` erreichbar und erreicht den Node Exporter
 über `host.docker.internal:9100` (gesetzt über die Umgebungsvariable `NODEEXPORTER_URL`).
 `listJavaProcesses` liefert im Container eine leere Liste, da das Runtime-Image weder `jps`
 noch `ps` enthält und nur die Prozesse des eigenen Containers sieht.
@@ -265,7 +265,7 @@ Das Script durchläuft den kompletten MCP-Protokollablauf:
 Beispielausgabe:
 
 ```
-Connecting to http://localhost:8080/sse ...
+Connecting to http://localhost:8099/sse ...
 Session endpoint: /mcp/message?sessionId=003c8063-07bb-49a3-ac42-95e048a10f3a
 
 [initialize]
@@ -342,7 +342,7 @@ formatierte Tabelle (PID, Name, CPU %, RAM MB) ausgegeben. Respektiert ebenfalls
 #### Manuell — SSE-Stream direkt beobachten
 
 ```bash
-curl -N http://localhost:8080/sse
+curl -N http://localhost:8099/sse
 ```
 
 ---
@@ -398,7 +398,7 @@ curl -N http://localhost:8080/sse
   "mcpServers": {
     "hello-world-mcp": {
       "type": "sse",
-      "url": "http://localhost:8080/sse"
+      "url": "http://localhost:8099/sse"
     }
   }
 }

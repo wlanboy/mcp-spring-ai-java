@@ -18,7 +18,7 @@ services:
     depends_on:
       - node-exporter
     ports:
-      - "8080:8080"
+      - "8099:8099"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
