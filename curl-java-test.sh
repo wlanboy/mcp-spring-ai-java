@@ -2,78 +2,79 @@
 set -euo pipefail
 
 SERVER="${MCP_SERVER:-http://localhost:8099}"
-SSE_LOG=$(mktemp /tmp/mcp-sse-XXXX.log)
+MCP_URL="$SERVER/mcp"
+PROTOCOL_VERSION="2025-11-25"
+HEADERS=$(mktemp /tmp/mcp-headers-XXXX)
+SESSION_ID=""
 
 cleanup() {
-  kill "$SSE_PID" 2>/dev/null || true
-  rm -f "$SSE_LOG"
+  if [ -n "$SESSION_ID" ]; then
+    curl -s -o /dev/null -X DELETE "$MCP_URL" -H "Mcp-Session-Id: $SESSION_ID" || true
+  fi
+  rm -f "$HEADERS"
 }
 trap cleanup EXIT
 
-# ── SSE-Verbindung aufbauen ────────────────────────────────────────────────
-echo "Connecting to $SERVER/sse ..."
-curl -sN "$SERVER/sse" >> "$SSE_LOG" &
-SSE_PID=$!
+# ── Hilfsfunktionen (siehe curl-test.sh) ──────────────────────────────────
+mcp_post() {
+  local body="$1"
+  local args=(-s -X POST "$MCP_URL"
+    -H "Content-Type: application/json"
+    -H "Accept: application/json, text/event-stream"
+    -H "MCP-Protocol-Version: $PROTOCOL_VERSION"
+    -D "$HEADERS")
+  if [ -n "$SESSION_ID" ]; then
+    args+=(-H "Mcp-Session-Id: $SESSION_ID")
+  fi
+  curl "${args[@]}" -d "$body"
+}
 
-ENDPOINT=""
-for _ in $(seq 20); do
-  sleep 0.3
-  ENDPOINT=$(grep -o '/mcp/message[^"[:space:]]*' "$SSE_LOG" 2>/dev/null | head -1 || true)
-  [ -n "$ENDPOINT" ] && break
-done
+extract_response() {
+  python3 -c '
+import sys, json
+want = int(sys.argv[1])
+raw = sys.stdin.read()
+messages = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")] or [raw]
+for m in messages:
+    try:
+        r = json.loads(m)
+    except ValueError:
+        continue
+    if r.get("id") == want:
+        print(json.dumps(r))
+        break
+' "$1"
+}
 
-if [ -z "$ENDPOINT" ]; then
-  echo "ERROR: Kein Session-Endpoint im SSE-Stream empfangen."
-  echo "--- SSE log ---"
-  cat "$SSE_LOG"
-  exit 1
-fi
-echo "Session endpoint: $ENDPOINT"
-echo ""
-
-# ── Hilfsfunktion ─────────────────────────────────────────────────────────
 send_request() {
   local label="$1"
   local body="$2"
   local id
-  id=$(echo "$body" | grep -o '"id": *[0-9]\+' | grep -o '[0-9]\+' || echo "")
+  id=$(echo "$body" | grep -o '"id": *[0-9]\+' | grep -o '[0-9]\+')
 
-  local lines_before
-  lines_before=$(wc -l < "$SSE_LOG")
+  local response
+  response=$(mcp_post "$body" | extract_response "$id" || true)
 
-  curl -sf -X POST "$SERVER$ENDPOINT" \
-    -H "Content-Type: application/json" \
-    -d "$body" > /dev/null
-
-  if [ -n "$id" ]; then
-    local response=""
-    for _ in $(seq 30); do
-      sleep 0.1
-      response=$(tail -n +"$lines_before" "$SSE_LOG" \
-        | grep '^data:' \
-        | grep "\"id\":$id" \
-        | head -1 \
-        | sed 's/^data: *//' || true)
-      [ -n "$response" ] && break
-    done
-    echo "[$label]"
-    if [ -n "$response" ]; then
-      echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
-      local extra
-      extra=$(echo "$response" | python3 -c "
+  echo "[$label]"
+  if [ -n "$response" ]; then
+    echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+    local extra
+    extra=$(echo "$response" | python3 -c "
 import sys, json
-r = json.load(sys.stdin)
-contents = r.get('result', {}).get('content', [])
-texts = [c['text'] for c in contents if c.get('type') == 'text']
-if not texts:
-    sys.exit(0)
-try:
-    processes = json.loads(texts[0])
-except Exception:
-    print('  => ' + texts[0])
-    sys.exit(0)
+result = json.load(sys.stdin).get('result', {})
+data = result.get('structuredContent')
+if data is None:
+    texts = [c['text'] for c in result.get('content', []) if c.get('type') == 'text']
+    if not texts:
+        sys.exit(0)
+    try:
+        data = json.loads(texts[0])
+    except Exception:
+        print('  => ' + texts[0])
+        sys.exit(0)
+processes = data.get('processes') if isinstance(data, dict) else None
 if not isinstance(processes, list):
-    print('  => ' + texts[0])
+    print('  => ' + json.dumps(data))
     sys.exit(0)
 col_pid  = max(5, max((len(str(p['pid']))  for p in processes), default=5))
 col_name = max(4, max((len(p['name'])      for p in processes), default=4))
@@ -92,31 +93,36 @@ for p in processes:
         p['ramMb'],  col_ram,
     ))
 " 2>/dev/null || true)
-      [ -n "$extra" ] && echo "$extra"
-    else
-      echo "(keine Antwort innerhalb von 3 s)"
-    fi
+    [ -n "$extra" ] && echo "$extra"
   else
-    echo "[$label] notification sent"
+    echo "(keine Antwort)"
   fi
   echo ""
 }
 
 # ── Handshake ─────────────────────────────────────────────────────────────
+echo "Connecting to $MCP_URL ..."
 send_request "initialize" '{
   "jsonrpc": "2.0",
   "id": 1,
   "method": "initialize",
   "params": {
-    "protocolVersion": "2024-11-05",
+    "protocolVersion": "'"$PROTOCOL_VERSION"'",
     "capabilities": {},
     "clientInfo": { "name": "curl-java-test", "version": "1.0" }
   }
 }'
 
-curl -sf -X POST "$SERVER$ENDPOINT" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
+SESSION_ID=$(grep -i '^mcp-session-id:' "$HEADERS" | cut -d' ' -f2 | tr -d '\r' || true)
+if [ -z "$SESSION_ID" ]; then
+  echo "ERROR: Keine Mcp-Session-Id im initialize-Response erhalten."
+  cat "$HEADERS"
+  exit 1
+fi
+echo "Session: $SESSION_ID"
+echo ""
+
+mcp_post '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
 echo "[notifications/initialized] sent"
 echo ""
 
