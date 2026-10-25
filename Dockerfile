@@ -5,7 +5,9 @@ COPY --chown=185:185 pom.xml .
 RUN --mount=type=cache,target=/home/default/.m2,uid=185 mvn -q dependency:go-offline
 
 COPY --chown=185:185 src ./src
-RUN --mount=type=cache,target=/home/default/.m2,uid=185 mvn -q -DskipTests package
+# compile -> process-aot (generates AOT bean definitions from the compiled classes) -> package
+# (jar includes the AOT classes). Property-based conditions are evaluated at build time.
+RUN --mount=type=cache,target=/home/default/.m2,uid=185 mvn -q -DskipTests compile spring-boot:process-aot package
 
 FROM registry.access.redhat.com/ubi10/openjdk-25-runtime:latest
 
@@ -23,4 +25,4 @@ COPY --from=build --chown=185:185 /home/default/app/target/helloworld-0.0.1-SNAP
 USER 185
 EXPOSE 8099
 
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["java", "-Dspring.aot.enabled=true", "-jar", "/app/app.jar"]
