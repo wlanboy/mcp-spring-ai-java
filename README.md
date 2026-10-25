@@ -253,74 +253,64 @@ Deckt alle vier Tool-Klassen sowie den Application-Context-Start ab
 ./curl-test.sh
 ```
 
-Das Script durchläuft den kompletten MCP-Protokollablauf:
+Das Script durchläuft den kompletten MCP-Protokollablauf über Streamable HTTP
+(alle Requests als `POST /mcp`):
 
-1. Öffnet eine SSE-Verbindung zu `/sse` und liest den Session-Endpoint aus dem Stream
-2. Sendet `initialize` (Handshake mit Protokollversion)
-3. Sendet `notifications/initialized` (Bestätigung)
-4. Ruft `tools/list` auf — zeigt alle registrierten Tools
-5. Ruft `tools/call greet` mit `name=World` auf
-6. Ruft `tools/call serverTime` auf
+1. Sendet `initialize` (Handshake mit Protokollversion `2025-11-25`) und liest die
+   Session-ID aus dem Response-Header `Mcp-Session-Id`
+2. Sendet `notifications/initialized` (Bestätigung) — ab hier mit `Mcp-Session-Id`-Header
+3. Ruft `tools/list` auf — zeigt alle registrierten Tools mit Titel und markiert Tools mit `outputSchema`
+4. Ruft `tools/call greet` mit `name=World` auf
+5. Ruft `tools/call serverTime` auf
+6. Beendet die Session per `DELETE /mcp`
 
-Beispielausgabe:
+Der Server antwortet je nach Request mit `application/json` oder als SSE-Stream
+(`text/event-stream`); das Script wertet beides aus.
+
+Beispielausgabe (gekürzt):
 
 ```
-Connecting to http://localhost:8099/sse ...
-Session endpoint: /mcp/message?sessionId=003c8063-07bb-49a3-ac42-95e048a10f3a
-
+Connecting to http://localhost:8099/mcp ...
 [initialize]
 {
     "jsonrpc": "2.0",
     "id": 1,
     "result": {
-        "protocolVersion": "2024-11-05",
-        "capabilities": {
-            "completions": {},
-            "logging": {},
-            "prompts": { "listChanged": true },
-            "resources": { "subscribe": false, "listChanged": true },
-            "tools": { "listChanged": true }
-        },
-        "serverInfo": {
-            "name": "hello-world-mcp",
-            "version": "1.0.0"
-        }
+        "protocolVersion": "2025-11-25",
+        "capabilities": { ... },
+        "serverInfo": { "name": "hello-world-mcp", "version": "1.0.0" },
+        "instructions": "Read-only monitoring server for a single Linux host. ..."
     }
 }
+
+Session: 51aeb62d-a640-464c-ba48-5ab170a2d118
 
 [notifications/initialized] sent
 
 [tools/list]
-{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "result": {
-        "tools": [ ... 17 Tools ... ]
-    }
-}
+  Verfügbare Tools:
+    - greet (Greet): Returns a greeting message for the given name
+    - serverTime (Server Time): Returns the current server time as ISO-8601 string
+    - listJavaProcesses (Java Processes) [outputSchema]: Lists all running Java processes ...
+    - getMemoryStats (Memory Usage) [outputSchema]: Returns system memory stats ...
+    ...
 
 [tools/call greet]
 {
     "jsonrpc": "2.0",
     "id": 3,
     "result": {
-        "content": [{ "type": "text", "text": "\"Hello, World! Welcome to the MCP Hello World Server.\"" }],
+        "content": [{ "type": "text", "text": "Hello, World! Welcome to the MCP Hello World Server." }],
         "isError": false
     }
 }
-  => "Hello, World! Welcome to the MCP Hello World Server."
-
-[tools/call serverTime]
-{
-    "jsonrpc": "2.0",
-    "id": 4,
-    "result": {
-        "content": [{ "type": "text", "text": "\"2026-06-04T08:10:42.098489232Z\"" }],
-        "isError": false
-    }
-}
-  => "2026-06-04T08:10:42.098489232Z"
+  => Hello, World! Welcome to the MCP Hello World Server.
 ```
+
+Tools mit `outputSchema` liefern ihr Ergebnis zusätzlich typisiert als `structuredContent`
+(neben demselben JSON als Text-Content für ältere Clients). Ist der `node_exporter` nicht
+erreichbar, liefern die betroffenen Tools `isError: true` mit einer lesbaren Meldung
+(`node_exporter not reachable at ... - is node_exporter running?`).
 
 Der Server-URL kann über die Umgebungsvariable `MCP_SERVER` überschrieben werden:
 
@@ -339,11 +329,16 @@ Führt denselben Handshake wie `curl-test.sh` durch und ruft anschließend
 formatierte Tabelle (PID, Name, CPU %, RAM MB) ausgegeben. Respektiert ebenfalls
 `MCP_SERVER`.
 
-#### Manuell — SSE-Stream direkt beobachten
+#### Manuell — initialize per curl
 
 ```bash
-curl -N http://localhost:8099/sse
+curl -i http://localhost:8099/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
 ```
+
+Der Header `Mcp-Session-Id` aus der Antwort muss bei allen weiteren Requests mitgeschickt werden.
 
 ---
 
@@ -397,8 +392,7 @@ curl -N http://localhost:8099/sse
 {
   "mcpServers": {
     "hello-world-mcp": {
-      "type": "sse",
-      "url": "http://localhost:8099/sse"
+      "url": "http://localhost:8099/mcp"
     }
   }
 }
