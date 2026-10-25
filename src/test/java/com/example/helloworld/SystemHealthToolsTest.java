@@ -1,14 +1,13 @@
 package com.example.helloworld;
 
 import java.util.List;
+import java.util.Locale;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.mcp.annotation.context.McpSyncRequestContext;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
@@ -23,27 +22,17 @@ class SystemHealthToolsTest {
     @Mock
     private McpSyncRequestContext ctx;
 
-    @InjectMocks
     private SystemHealthTools systemHealth;
 
+    // Host core count as reported by node_exporter - deliberately fixed and independent of
+    // the test JVM's availableProcessors().
+    private static final int CORES = 4;
+
     @BeforeEach
-    void setThresholds() {
-        ReflectionTestUtils.setField(systemHealth, "cpuWarning",       70.0);
-        ReflectionTestUtils.setField(systemHealth, "cpuCritical",      90.0);
-        ReflectionTestUtils.setField(systemHealth, "memoryWarning",    80.0);
-        ReflectionTestUtils.setField(systemHealth, "memoryCritical",   90.0);
-        ReflectionTestUtils.setField(systemHealth, "swapWarning",      70.0);
-        ReflectionTestUtils.setField(systemHealth, "swapCritical",     90.0);
-        ReflectionTestUtils.setField(systemHealth, "diskWarning",      80.0);
-        ReflectionTestUtils.setField(systemHealth, "diskCritical",     90.0);
-        ReflectionTestUtils.setField(systemHealth, "tempWarningPercent",  80.0);
-        ReflectionTestUtils.setField(systemHealth, "tempCriticalPercent", 95.0);
-        ReflectionTestUtils.setField(systemHealth, "psiIoFullWarning",    5.0);
-        ReflectionTestUtils.setField(systemHealth, "psiIoFullCritical",  20.0);
-        ReflectionTestUtils.setField(systemHealth, "psiMemFullWarning",   1.0);
-        ReflectionTestUtils.setField(systemHealth, "psiMemFullCritical", 10.0);
-        ReflectionTestUtils.setField(systemHealth, "psiCpuSomeWarning",  30.0);
-        ReflectionTestUtils.setField(systemHealth, "psiCpuSomeCritical", 70.0);
+    void setUp() {
+        // HealthThresholds defaults: cpu 70/90, memory 80/90, swap 70/90, disk 80/90,
+        // temperature 80/95, psi cpu.some 30/70, io.full 5/20, memory.full 1/10
+        systemHealth = new SystemHealthTools(nodeExporter, new HealthThresholds());
     }
 
     // ── Fixtures ───────────────────────────────────────────────────────────
@@ -67,7 +56,7 @@ class SystemHealthToolsTest {
                        List<NodeExporterTools.DiskSpace> disks, List<NodeExporterTools.Temperature> temperatures,
                        NodeExporterTools.PressureStats pressure) {
         when(nodeExporter.getHealthSnapshot()).thenReturn(
-                new NodeExporterTools.HealthSnapshot(memory, swap, cpu, load, disks, temperatures, pressure));
+                new NodeExporterTools.HealthSnapshot(memory, swap, cpu, load, CORES, disks, temperatures, pressure));
     }
 
     private void stubAllOk() {
@@ -169,9 +158,8 @@ class SystemHealthToolsTest {
 
     @Test
     void getSystemAnomalies_loadCriticalWhenDoubleCores() {
-        int cores = Runtime.getRuntime().availableProcessors();
         stub(OK_MEMORY, OK_SWAP, OK_CPU,
-                new NodeExporterTools.SystemLoad(cores * 2.5, cores * 2.0, cores * 1.5),
+                new NodeExporterTools.SystemLoad(CORES * 2.5, CORES * 2.0, CORES * 1.5),
                 OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
         assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
@@ -182,15 +170,53 @@ class SystemHealthToolsTest {
 
     @Test
     void getSystemAnomalies_loadWarningWhenExceedsCoreCount() {
-        int cores = Runtime.getRuntime().availableProcessors();
         stub(OK_MEMORY, OK_SWAP, OK_CPU,
-                new NodeExporterTools.SystemLoad(cores * 1.5, cores, cores * 0.8),
+                new NodeExporterTools.SystemLoad(CORES * 1.5, CORES, CORES * 0.8),
                 OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
         assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("load");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.WARNING);
         });
+    }
+
+    @Test
+    void getSystemAnomalies_loadUsesHostCoreCountFromNodeExporter() {
+        stub(OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
+
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
+            assertThat(a.metric()).isEqualTo("load");
+            assertThat(a.value()).endsWith("(cores: " + CORES + ")");
+        });
+    }
+
+    @Test
+    void getSystemAnomalies_loadFallsBackToJvmCoresWhenNodeExporterHasNoCpuMetrics() {
+        when(nodeExporter.getHealthSnapshot()).thenReturn(new NodeExporterTools.HealthSnapshot(
+                OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD, 0, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE));
+        int jvmCores = Runtime.getRuntime().availableProcessors();
+
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
+            assertThat(a.metric()).isEqualTo("load");
+            assertThat(a.value()).endsWith("(cores: " + jvmCores + ")");
+        });
+    }
+
+    // ── Formatting ────────────────────────────────────────────────────────
+
+    @Test
+    void getSystemAnomalies_formatsNumbersLocaleIndependent() {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.GERMANY);
+        try {
+            stubAllOk();
+            assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
+                assertThat(a.metric()).isEqualTo("memory");
+                assertThat(a.value()).isEqualTo("50.0% (4096/8192 MB used)");
+            });
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 
     // ── Disk ──────────────────────────────────────────────────────────────

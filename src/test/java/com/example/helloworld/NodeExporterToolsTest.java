@@ -247,4 +247,21 @@ class NodeExporterToolsTest {
         assertThat(info.os()).isEqualTo("unknown");
         assertThat(info.machine()).isEqualTo("unknown");
     }
+
+    // ── parseCpuSeconds ────────────────────────────────────────────────────
+
+    @Test
+    void parseCpuSeconds_groupsModesPerCpu() {
+        // the number of distinct cpu labels is used as host core count for the load check
+        String raw = """
+                node_cpu_seconds_total{cpu="0",mode="idle"} 100
+                node_cpu_seconds_total{cpu="0",mode="user"} 10
+                node_cpu_seconds_total{cpu="1",mode="idle"} 200
+                node_cpu_seconds_total{cpu="1",mode="user"} 20
+                node_load1 0.5
+                """;
+        Map<String, Map<String, Double>> cpus = NodeExporterTools.parseCpuSeconds(raw);
+        assertThat(cpus).hasSize(2);
+        assertThat(cpus.get("1")).containsEntry("idle", 200.0).containsEntry("user", 20.0);
+    }
 }

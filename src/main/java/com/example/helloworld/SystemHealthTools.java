@@ -3,9 +3,9 @@ package com.example.helloworld;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.context.McpSyncRequestContext;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -13,56 +13,11 @@ public class SystemHealthTools {
 
     private final NodeExporterTools nodeExporter;
 
-    @Value("${health.threshold.cpu.warning:70}")
-    private double cpuWarning;
+    private final HealthThresholds thresholds;
 
-    @Value("${health.threshold.cpu.critical:90}")
-    private double cpuCritical;
-
-    @Value("${health.threshold.memory.warning:80}")
-    private double memoryWarning;
-
-    @Value("${health.threshold.memory.critical:90}")
-    private double memoryCritical;
-
-    @Value("${health.threshold.swap.warning:70}")
-    private double swapWarning;
-
-    @Value("${health.threshold.swap.critical:90}")
-    private double swapCritical;
-
-    @Value("${health.threshold.disk.warning:80}")
-    private double diskWarning;
-
-    @Value("${health.threshold.disk.critical:90}")
-    private double diskCritical;
-
-    @Value("${health.threshold.temperature.warning:80}")
-    private double tempWarningPercent;
-
-    @Value("${health.threshold.temperature.critical:95}")
-    private double tempCriticalPercent;
-
-    @Value("${health.threshold.psi.io.full.warning:5}")
-    private double psiIoFullWarning;
-
-    @Value("${health.threshold.psi.io.full.critical:20}")
-    private double psiIoFullCritical;
-
-    @Value("${health.threshold.psi.memory.full.warning:1}")
-    private double psiMemFullWarning;
-
-    @Value("${health.threshold.psi.memory.full.critical:10}")
-    private double psiMemFullCritical;
-
-    @Value("${health.threshold.psi.cpu.some.warning:30}")
-    private double psiCpuSomeWarning;
-
-    @Value("${health.threshold.psi.cpu.some.critical:70}")
-    private double psiCpuSomeCritical;
-
-    public SystemHealthTools(NodeExporterTools nodeExporter) {
+    public SystemHealthTools(NodeExporterTools nodeExporter, HealthThresholds thresholds) {
         this.nodeExporter = nodeExporter;
+        this.thresholds = thresholds;
     }
 
     enum Severity { OK, WARNING, CRITICAL }
@@ -91,28 +46,31 @@ public class SystemHealthTools {
         NodeExporterTools.MemoryStats mem = snap.memory();
         results.add(check(
                 "memory",
-                "%.1f%% (%d/%d MB used)".formatted(mem.usedPercent(), mem.usedMb(), mem.totalMb()),
-                mem.usedPercent(), memoryWarning, memoryCritical, "Memory usage"));
+                fmt("%.1f%% (%d/%d MB used)", mem.usedPercent(), mem.usedMb(), mem.totalMb()),
+                mem.usedPercent(), thresholds.getMemory(), "Memory usage"));
 
         NodeExporterTools.SwapStats swap = snap.swap();
         if (swap.totalMb() > 0) {
             results.add(check(
                     "swap",
-                    "%.1f%% (%d/%d MB used)".formatted(swap.usedPercent(), swap.usedMb(), swap.totalMb()),
-                    swap.usedPercent(), swapWarning, swapCritical, "Swap usage"));
+                    fmt("%.1f%% (%d/%d MB used)", swap.usedPercent(), swap.usedMb(), swap.totalMb()),
+                    swap.usedPercent(), thresholds.getSwap(), "Swap usage"));
         }
 
         NodeExporterTools.CpuUsage cpu = snap.cpu();
         results.add(check(
                 "cpu",
-                "%.1f%% (user %.1f%%, system %.1f%%)".formatted(cpu.totalUsedPercent(), cpu.userPercent(), cpu.systemPercent()),
-                cpu.totalUsedPercent(), cpuWarning, cpuCritical, "CPU usage"));
+                fmt("%.1f%% (user %.1f%%, system %.1f%%)", cpu.totalUsedPercent(), cpu.userPercent(), cpu.systemPercent()),
+                cpu.totalUsedPercent(), thresholds.getCpu(), "CPU usage"));
 
         NodeExporterTools.SystemLoad load = snap.load();
-        int cores = Runtime.getRuntime().availableProcessors();
+        // Load average is a host metric, so compare it against the host's core count from
+        // node_exporter - availableProcessors() is the container's view when running in Docker.
+        // It is only the fallback if node_exporter exposes no per-CPU metrics.
+        int cores = snap.cpuCores() > 0 ? snap.cpuCores() : Runtime.getRuntime().availableProcessors();
         results.add(checkLoad(
                 "load",
-                "%.2f / %.2f / %.2f (cores: %d)".formatted(load.load1(), load.load5(), load.load15(), cores),
+                fmt("%.2f / %.2f / %.2f (cores: %d)", load.load1(), load.load5(), load.load15(), cores),
                 load.load1(), cores));
 
         results.addAll(checkDiskSpace(snap.diskSpace()));
@@ -131,8 +89,8 @@ public class SystemHealthTools {
         for (NodeExporterTools.DiskSpace disk : disks) {
             results.add(check(
                     "disk:" + disk.mountPoint(),
-                    "%.1f%% (%d/%d GB used)".formatted(disk.usedPercent(), disk.usedGb(), disk.totalGb()),
-                    disk.usedPercent(), diskWarning, diskCritical,
+                    fmt("%.1f%% (%d/%d GB used)", disk.usedPercent(), disk.usedGb(), disk.totalGb()),
+                    disk.usedPercent(), thresholds.getDisk(),
                     "Disk " + disk.mountPoint()));
         }
         if (results.isEmpty()) {
@@ -143,30 +101,32 @@ public class SystemHealthTools {
 
     private List<Anomaly> checkPressure(NodeExporterTools.PressureStats p) {
         List<Anomaly> results = new ArrayList<>();
+        HealthThresholds.Psi psi = thresholds.getPsi();
 
-        results.add(check("psi:cpu:some",    "%.1f%%".formatted(p.cpuSomePercent()),
-                p.cpuSomePercent(), psiCpuSomeWarning, psiCpuSomeCritical, "CPU pressure (some)"));
-        results.add(check("psi:io:full",     "%.1f%%".formatted(p.ioFullPercent()),
-                p.ioFullPercent(), psiIoFullWarning, psiIoFullCritical, "IO pressure (full)"));
-        results.add(check("psi:memory:full", "%.1f%%".formatted(p.memoryFullPercent()),
-                p.memoryFullPercent(), psiMemFullWarning, psiMemFullCritical, "Memory pressure (full)"));
+        results.add(check("psi:cpu:some",    fmt("%.1f%%", p.cpuSomePercent()),
+                p.cpuSomePercent(), psi.getCpu().getSome(), "CPU pressure (some)"));
+        results.add(check("psi:io:full",     fmt("%.1f%%", p.ioFullPercent()),
+                p.ioFullPercent(), psi.getIo().getFull(), "IO pressure (full)"));
+        results.add(check("psi:memory:full", fmt("%.1f%%", p.memoryFullPercent()),
+                p.memoryFullPercent(), psi.getMemory().getFull(), "Memory pressure (full)"));
 
         return results;
     }
 
     private List<Anomaly> checkTemperatures(List<NodeExporterTools.Temperature> temperatures) {
         List<Anomaly> results = new ArrayList<>();
+        HealthThresholds.Limits limits = thresholds.getTemperature();
         for (NodeExporterTools.Temperature t : temperatures) {
             if (t.critCelsius() <= 0) continue;
             double pct = t.celsius() / t.critCelsius() * 100;
-            String value = "%.1f°C (crit: %.1f°C)".formatted(t.celsius(), t.critCelsius());
+            String value = fmt("%.1f°C (crit: %.1f°C)", t.celsius(), t.critCelsius());
             String label = "%s/%s".formatted(t.chip(), t.sensor());
-            if (pct >= tempCriticalPercent)
+            if (pct >= limits.getCritical())
                 results.add(new Anomaly("temperature:" + label, value, Severity.CRITICAL,
-                        "Temperature critically high: %.1f°C is %.0f%% of critical threshold".formatted(t.celsius(), pct)));
-            else if (pct >= tempWarningPercent)
+                        fmt("Temperature critically high: %.1f°C is %.0f%% of critical threshold", t.celsius(), pct)));
+            else if (pct >= limits.getWarning())
                 results.add(new Anomaly("temperature:" + label, value, Severity.WARNING,
-                        "Temperature elevated: %.1f°C is %.0f%% of critical threshold".formatted(t.celsius(), pct)));
+                        fmt("Temperature elevated: %.1f°C is %.0f%% of critical threshold", t.celsius(), pct)));
         }
         if (results.isEmpty())
             results.add(new Anomaly("temperature", "all sensors normal", Severity.OK, "All temperatures within safe range"));
@@ -174,23 +134,29 @@ public class SystemHealthTools {
     }
 
     private Anomaly check(String metric, String value, double current,
-                          double warning, double critical, String label) {
-        if (current >= critical)
+                          HealthThresholds.Limits limits, String label) {
+        if (current >= limits.getCritical())
             return new Anomaly(metric, value, Severity.CRITICAL,
-                    "%s critically high: %.1f%%".formatted(label, current));
-        if (current >= warning)
+                    fmt("%s critically high: %.1f%%", label, current));
+        if (current >= limits.getWarning())
             return new Anomaly(metric, value, Severity.WARNING,
-                    "%s elevated: %.1f%%".formatted(label, current));
+                    fmt("%s elevated: %.1f%%", label, current));
         return new Anomaly(metric, value, Severity.OK, "%s is normal".formatted(label));
     }
 
     private Anomaly checkLoad(String metric, String value, double load1, int cores) {
         if (load1 >= cores * 2.0)
             return new Anomaly(metric, value, Severity.CRITICAL,
-                    "System severely overloaded: load %.2f with %d cores".formatted(load1, cores));
+                    fmt("System severely overloaded: load %.2f with %d cores", load1, cores));
         if (load1 >= cores)
             return new Anomaly(metric, value, Severity.WARNING,
-                    "Load exceeds core count: %.2f > %d".formatted(load1, cores));
+                    fmt("Load exceeds core count: %.2f > %d", load1, cores));
         return new Anomaly(metric, value, Severity.OK, "System load is normal");
+    }
+
+    // Locale.ROOT: String.formatted() uses the JVM's default locale, which would render
+    // "50,0%" on a German system - the LLM and any parser should always see "50.0%".
+    private static String fmt(String pattern, Object... args) {
+        return String.format(Locale.ROOT, pattern, args);
     }
 }

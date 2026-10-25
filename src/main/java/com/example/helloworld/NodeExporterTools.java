@@ -73,6 +73,7 @@ public class NodeExporterTools {
             SwapStats swap,
             CpuUsage cpu,
             SystemLoad load,
+            int cpuCores,
             List<DiskSpace> diskSpace,
             List<Temperature> temperatures,
             PressureStats pressure) {}
@@ -270,7 +271,8 @@ public class NodeExporterTools {
         Map<String, Double> scalarsBefore = parseScalars(beforeRaw);
         Map<String, Double> scalarsAfter = parseScalars(afterRaw);
 
-        CpuUsage cpu = computeCpuUsage(parseCpuSeconds(beforeRaw), parseCpuSeconds(afterRaw));
+        Map<String, Map<String, Double>> cpuSecondsAfter = parseCpuSeconds(afterRaw);
+        CpuUsage cpu = computeCpuUsage(parseCpuSeconds(beforeRaw), cpuSecondsAfter);
         PressureStats pressure = computePressureStats(scalarsBefore, scalarsAfter, elapsed);
 
         return new HealthSnapshot(
@@ -278,6 +280,8 @@ public class NodeExporterTools {
                 parseSwap(scalarsAfter),
                 cpu,
                 parseLoad(scalarsAfter),
+                // one entry per cpu="N" label = number of logical CPUs on the host
+                cpuSecondsAfter.size(),
                 parseDiskSpace(afterRaw),
                 parseTemperatures(afterRaw),
                 pressure);
@@ -443,7 +447,7 @@ public class NodeExporterTools {
         return parseCpuSeconds(fetchRaw());
     }
 
-    private static Map<String, Map<String, Double>> parseCpuSeconds(String raw) {
+    static Map<String, Map<String, Double>> parseCpuSeconds(String raw) {
         Map<String, Map<String, Double>> result = new HashMap<>();
         for (String line : raw.lines().toList()) {
             if (!line.startsWith("node_cpu_seconds_total{")) continue;
