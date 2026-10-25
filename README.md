@@ -5,6 +5,15 @@ Neben einem Hello-World-Beispiel stellt er reale System-Monitoring-Tools bereit:
 Java-Prozesse, Host-Metriken über den Prometheus `node_exporter` sowie eine aggregierte
 Health-Check-Auswertung mit konfigurierbaren Schwellwerten.
 
+Eckdaten:
+
+- Transport: **Streamable HTTP** (`POST /mcp`), MCP-Protokollversion bis `2025-11-25`
+- Tools per `@McpTool`-Annotation, mit Titel, Tool-Annotations (`readOnlyHint` …) und
+  **Structured Output** (`outputSchema` + `structuredContent`)
+- Progress- und Log-Notifications für die Tools, die über 1 Sekunde messen
+- Server-`instructions` im Handshake, die dem LLM den Einstieg erklären
+- Docker-Image mit Spring **AOT** für schnelleren Start
+
 ## Voraussetzungen
 
 - Java 25
@@ -18,7 +27,7 @@ Health-Check-Auswertung mit konfigurierbaren Schwellwerten.
 
 ```bash
 curl -s -o spring-init.zip "https://start.spring.io/starter.zip?\
-type=maven-project&language=java&bootVersion=4.1.1\
+type=maven-project&language=java&bootVersion=4.1.2\
 &groupId=com.example&artifactId=helloworld\
 &packageName=com.example.helloworld&javaVersion=25\
 &dependencies=configuration-processor,spring-ai-mcp-server,webflux"
@@ -66,8 +75,8 @@ reaktive Variante ändern:
 Der Starter zieht WebFlux, Reactor und den MCP-Protokollstack selbst mit —
 `spring-boot-starter-webflux` muss nicht separat eingetragen werden.
 
-Aktuell im Projekt verwendet: `spring-boot-starter-parent` `4.1.1`,
-`spring-ai-starter-mcp-server-webflux` `2.0.1` (GA-Release).
+Aktuell im Projekt verwendet: `spring-boot-starter-parent` `4.1.2`,
+`spring-ai-starter-mcp-server-webflux` `2.0.2` (GA-Release, bringt das MCP Java SDK `2.1.0` mit).
 
 **c) Spring Milestones Repository:**
 
@@ -91,48 +100,74 @@ Aktuell im Projekt verwendet: `spring-boot-starter-parent` `4.1.1`,
 
 ### 3. Tool-Klassen erstellen
 
-MCP-Tools sind einfache Spring-Beans, deren Methoden mit `@Tool` annotiert werden.
-Die `description` erscheint im MCP-Toolkatalog und wird vom KI-Modell für die
-Tool-Auswahl genutzt. Minimalbeispiel (`HelloWorldTools.java`):
+MCP-Tools sind einfache Spring-Beans, deren Methoden mit `@McpTool` annotiert werden.
+`description` erscheint im MCP-Toolkatalog und wird vom KI-Modell für die Tool-Auswahl
+genutzt, `title` ist der Anzeigename im Client. Die `annotations` beschreiben das
+Verhalten des Tools (hier: rein lesend, idempotent, keine externen Systeme).
+Minimalbeispiel (`HelloWorldTools.java`):
 
 ```java
 @Service
 public class HelloWorldTools {
 
-    @Tool(description = "Returns a greeting message for the given name")
-    public String greet(String name) {
-        return "Hello, %s! Welcome to the MCP Hello World Server.".formatted(name);
-    }
-
-    @Tool(description = "Returns the current server time as ISO-8601 string")
-    public String serverTime() {
-        return java.time.Instant.now().toString();
+    @McpTool(title = "Greet", description = "Returns a greeting message for the given name",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
+    public String greet(@McpToolParam(description = "Name to greet", required = true) String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("name must not be blank");
+        }
+        return "Hello, %s! Welcome to the MCP Hello World Server.".formatted(name.strip());
     }
 }
 ```
+
+**Structured Output:** Tools, die einen Record zurückgeben, setzen
+`generateOutputSchema = true`. Der Client bekommt dann in `tools/list` ein `outputSchema`
+und beim Aufruf das Ergebnis typisiert als `structuredContent` (plus dasselbe JSON als
+Text-Content für ältere Clients). Die MCP-Spezifikation verlangt dafür ein JSON-*Objekt* —
+Listen werden deshalb in einen Record verpackt:
+
+```java
+record DiskSpaceReport(List<DiskSpace> filesystems) {}
+
+@McpTool(title = "Disk Space", generateOutputSchema = true, description = "...")
+public DiskSpaceReport getDiskSpace() { ... }
+```
+
+**Fehlerbehandlung:** Tool-Methoden werfen nur unchecked Exceptions. Spring AI macht
+daraus ein Ergebnis mit `isError: true` und der Exception-Message, die das LLM lesen kann.
+Checked Exceptions würden dagegen als nichtssagender JSON-RPC-Fehler
+`-32603 Internal error` beim Client ankommen.
+
+**Progress/Logging:** Tools, die über eine Sekunde messen, nehmen einen
+`McpSyncRequestContext`-Parameter entgegen (taucht nicht im Input-Schema auf) und melden
+darüber `ctx.info(...)` und `ctx.progress(...)` an den Client.
 
 Das Projekt enthält daneben drei weitere Tool-Klassen mit insgesamt 13 zusätzlichen
 Tools — siehe [Verfügbare Tools](#verfügbare-tools) weiter unten.
 
 ---
 
-### 4. Tools als Bean registrieren (`HelloworldApplication.java`)
+### 4. Application-Klasse (`HelloworldApplication.java`)
 
-Spring AI benötigt einen `ToolCallbackProvider`-Bean, der dem MCP-Server mitteilt,
-welche Tools exportiert werden sollen. Alle Tool-Beans werden hier gebündelt:
+Eine explizite Registrierung der Tools (früher per `ToolCallbackProvider`-Bean) ist nicht
+mehr nötig: Der Annotation-Scanner von Spring AI findet alle `@McpTool`-/`@McpResource`-
+Methoden auf Spring-Beans automatisch.
 
 ```java
-@Bean
-public ToolCallbackProvider helloWorldToolCallbacks(
-        HelloWorldTools helloWorldTools,
-        JavaProcessTools javaProcessTools,
-        NodeExporterTools nodeExporterTools,
-        SystemHealthTools systemHealthTools) {
-    return MethodToolCallbackProvider.builder()
-        .toolObjects(helloWorldTools, javaProcessTools, nodeExporterTools, systemHealthTools)
-        .build();
+@SpringBootApplication
+@ConfigurationPropertiesScan
+public class HelloworldApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(HelloworldApplication.class, args);
+	}
 }
 ```
+
+`@ConfigurationPropertiesScan` registriert die typisierte Konfiguration
+[`HealthThresholds`](src/main/java/com/example/helloworld/HealthThresholds.java)
+(`health.threshold.*`, siehe nächster Abschnitt).
 
 ---
 
@@ -143,7 +178,10 @@ spring.application.name=helloworld
 
 spring.ai.mcp.server.name=hello-world-mcp
 spring.ai.mcp.server.version=1.0.0
-spring.ai.mcp.server.type=ASYNC
+spring.ai.mcp.server.type=SYNC
+spring.ai.mcp.server.protocol=STREAMABLE
+spring.ai.mcp.server.instructions=Read-only monitoring server for a single Linux host. \
+Start with getSystemAnomalies for an overall health check ...
 
 server.port=8099
 
@@ -171,12 +209,24 @@ health.threshold.psi.memory.full.warning=1
 health.threshold.psi.memory.full.critical=10
 ```
 
-- `type=ASYNC` aktiviert den reaktiven SSE-Transport (passend zu WebFlux).
+- `type=SYNC`: Alle Tool-Methoden sind blockierend (HttpClient, `Thread.sleep`,
+  `ProcessBuilder`). Im `ASYNC`-Modus registriert Spring AI nur Methoden mit
+  `Mono`/`Flux`-Rückgabe — die imperativen Tools würden stillschweigend fehlen.
+- `protocol=STREAMABLE`: Streamable HTTP mit einem einzigen Endpoint `POST /mcp`. Der
+  frühere SSE-Transport (`/sse` + `/mcp/message`) ist seit Spring AI 2.0 deprecated, ist
+  beim WebFlux-Starter aber weiterhin der Default — daher die explizite Angabe.
+- `instructions` wird beim `initialize` an den Client geschickt und erklärt dem LLM, wie
+  es die Tools sinnvoll nutzt (erst `getSystemAnomalies`, dann gezielt nachfassen).
 - `name` und `version` erscheinen im MCP-Handshake.
 - `node-exporter.url` zeigt auf den `/metrics`-Endpunkt eines laufenden `node_exporter`
-  (Default: `http://localhost:9100/metrics`, siehe unten).
-- Alle `health.threshold.*`-Werte haben Defaults im Code (`@Value("...:default")`) und
-  müssen nicht zwingend gesetzt werden.
+  (Default: `http://localhost:9100/metrics`, siehe unten). Per Umgebungsvariable
+  `NODEEXPORTER_URL` überschreibbar (Relaxed Binding, siehe `docker-compose.yml`).
+- Die `health.threshold.*`-Werte werden in
+  [`HealthThresholds`](src/main/java/com/example/helloworld/HealthThresholds.java)
+  gebunden (`@ConfigurationProperties`). Jeder Wert hat dort einen eigenen Default, so dass
+  auch einzelne Werte überschrieben werden können (z.B. nur `health.threshold.cpu.warning`).
+  Die IDE bietet für alle Keys Autovervollständigung an (Metadaten vom
+  `spring-boot-configuration-processor`).
 
 ---
 
@@ -201,9 +251,17 @@ Zum Stoppen und Entfernen des Containers dient [`nodeexporter-delete.sh`](nodeex
 ./nodeexporter-delete.sh
 ```
 
-Ohne laufenden `node_exporter` schlagen alle `NodeExporterTools`- und
-`SystemHealthTools`-Aufrufe mit einem HTTP-Fehler fehl; `HelloWorldTools` und
+Ohne laufenden `node_exporter` liefern alle `NodeExporterTools`- und
+`SystemHealthTools`-Aufrufe `isError: true` mit der Meldung
+`node_exporter not reachable at ... - is node_exporter running?`; `HelloWorldTools` und
 `JavaProcessTools` sind davon unabhängig nutzbar.
+
+Für lokale Tests ohne echten Exporter liefert [`fake_node_exporter.py`](fake_node_exporter.py)
+statische Beispielmetriken auf Port 9100:
+
+```bash
+python3 fake_node_exporter.py
+```
 
 ---
 
@@ -213,13 +271,27 @@ Ohne laufenden `node_exporter` schlagen alle `NodeExporterTools`- und
 ./mvnw spring-boot:run
 ```
 
-Der Server lauscht auf `http://localhost:8099`.
+Der Server lauscht auf `http://localhost:8099`, der MCP-Endpoint ist `http://localhost:8099/mcp`.
+
+#### Mit Spring AOT
+
+Wie im Docker-Image: AOT-Metadaten beim Build erzeugen und zur Laufzeit aktivieren.
+
+```bash
+./mvnw -DskipTests compile spring-boot:process-aot package
+java -Dspring.aot.enabled=true -jar target/helloworld-0.0.1-SNAPSHOT.jar
+```
+
+Im Log steht dann `Starting AOT-processed HelloworldApplication`. Bedingungen auf Basis
+von Properties (z.B. `spring.ai.mcp.server.protocol`) werden bei AOT schon zur Build-Zeit
+ausgewertet — wer sie ändert, muss neu bauen. Normale Werte wie `node-exporter.url` oder
+die Schwellwerte bleiben zur Laufzeit überschreibbar.
 
 #### Alternativ: Docker Compose (MCP-Server + Node Exporter)
 
 [`docker-compose.yml`](docker-compose.yml) startet `node-exporter` (wie in
 [`nodeexporter.sh`](nodeexporter.sh) im Host-Netzwerk) und den MCP-Server, gebaut aus dem
-[`Dockerfile`](Dockerfile) (einfaches Fat-JAR, ohne Layers/AOT):
+[`Dockerfile`](Dockerfile) (Fat-JAR mit Spring AOT, `-Dspring.aot.enabled=true`):
 
 ```bash
 docker compose up -d --build
@@ -239,9 +311,10 @@ noch `ps` enthält und nur die Prozesse des eigenen Containers sieht.
 ./mvnw test
 ```
 
-Deckt alle vier Tool-Klassen sowie den Application-Context-Start ab
-(`HelloWorldToolsTest`, `JavaProcessToolsTest`, `NodeExporterToolsTest`,
-`SystemHealthToolsTest`, `HelloworldApplicationTests`).
+Deckt alle vier Tool-Klassen, das Binding der Schwellwerte sowie den
+Application-Context-Start ab (`HelloWorldToolsTest`, `JavaProcessToolsTest`,
+`NodeExporterToolsTest`, `SystemHealthToolsTest`, `HealthThresholdsTest`,
+`HelloworldApplicationTests`).
 
 ---
 
@@ -344,45 +417,53 @@ Der Header `Mcp-Session-Id` aus der Antwort muss bei allen weiteren Requests mit
 
 ## Verfügbare Tools
 
+Alle Tools sind rein lesend (`readOnlyHint = true`). Die Spalte *Ergebnis* zeigt die
+Form des `structuredContent`; Tools ohne Eintrag liefern nur Text.
+
 ### HelloWorldTools
 
-| Tool | Beschreibung |
-|---|---|
-| `greet(name)` | Begrüßung für den übergebenen Namen (validiert: nicht leer, max. 100 Zeichen) |
-| `serverTime()` | Aktuelle Serverzeit als ISO-8601-String |
+| Tool | Titel | Beschreibung | Ergebnis |
+|---|---|---|---|
+| `greet(name)` | Greet | Begrüßung für den übergebenen Namen (validiert: nicht leer, max. 100 Zeichen) | — |
+| `serverTime()` | Server Time | Aktuelle Serverzeit als ISO-8601-String | — |
 
 ### JavaProcessTools
 
-| Tool | Beschreibung |
-|---|---|
-| `listJavaProcesses()` | Alle laufenden Java-Prozesse mit PID, Name, CPU % und RAM (MB), via `jps`/`ps` |
+| Tool | Titel | Beschreibung | Ergebnis |
+|---|---|---|---|
+| `listJavaProcesses()` | Java Processes | Alle laufenden Java-Prozesse mit PID, Name, CPU % und RAM (MB), via `jps`/`ps` | `{processes: [...]}` |
 
 ### NodeExporterTools
 
 *Benötigt einen laufenden `node_exporter`, siehe [Node Exporter starten](#6-node-exporter-starten).*
 
-| Tool | Beschreibung |
+| Tool | Titel | Beschreibung | Ergebnis |
+|---|---|---|---|
+| `getMemoryStats()` | Memory Usage | RAM: total, verfügbar, belegt (MB) + Prozent | Objekt |
+| `getSwapStats()` | Swap Usage | Swap: total, frei, belegt (MB) + Prozent | Objekt |
+| `getSystemLoad()` | System Load | Load Average für 1/5/15 Minuten | Objekt |
+| `getCpuUsage()` | CPU Usage | CPU-Auslastung (user/system/idle) über 1 Sekunde gemessen, alle Kerne | Objekt |
+| `getNetworkStats()` | Network Traffic | Netzwerktraffic (MB empfangen/gesendet) pro Interface | `{interfaces: [...]}` |
+| `getSystemUptime()` | System Uptime | Uptime seit letztem Boot (Stunden/Minuten) | — |
+| `getDiskActivity()` | Disk Activity | Disk-I/O (MB/s Lesen/Schreiben) pro Gerät, über 1 Sekunde gemessen | `{devices: [...]}` |
+| `getDiskSpace()` | Disk Space | Speicherplatz pro Dateisystem (Mountpoint, Device, Typ, GB, Prozent); virtuelle Dateisysteme ausgeschlossen | `{filesystems: [...]}` |
+| `getNetworkErrors()` | Network Errors | Kumulative Netzwerkfehler/-drops pro Interface seit Systemstart | `{interfaces: [...]}` |
+| `getTemperatures()` | Hardware Temperatures | Hardware-Temperaturen (°C) je Sensor inkl. kritischem Schwellwert, absteigend sortiert | `{sensors: [...]}` |
+| `getPressureStats()` | Pressure Stall Information | Linux PSI (Pressure Stall Information) für CPU/IO/Memory, über 1 Sekunde gemessen | Objekt |
+
+Zusätzlich als **MCP-Resource** (statt Tool, da statische Host-Info):
+
+| Resource-URI | Beschreibung |
 |---|---|
-| `getMemoryStats()` | RAM: total, verfügbar, belegt (MB) + Prozent |
-| `getSwapStats()` | Swap: total, frei, belegt (MB) + Prozent |
-| `getSystemLoad()` | Load Average für 1/5/15 Minuten |
-| `getCpuUsage()` | CPU-Auslastung (user/system/idle) über 1 Sekunde gemessen, alle Kerne |
-| `getNetworkStats()` | Netzwerktraffic (MB empfangen/gesendet) pro Interface |
-| `getSystemUptime()` | Uptime seit letztem Boot (Stunden/Minuten) |
-| `getDiskActivity()` | Disk-I/O (MB/s Lesen/Schreiben) pro Gerät, über 1 Sekunde gemessen |
-| `getDiskSpace()` | Speicherplatz pro Dateisystem (Mountpoint, Device, Typ, GB, Prozent); virtuelle Dateisysteme ausgeschlossen |
-| `getNetworkErrors()` | Kumulative Netzwerkfehler/-drops pro Interface seit Systemstart |
-| `getTemperatures()` | Hardware-Temperaturen (°C) je Sensor inkl. kritischem Schwellwert, absteigend sortiert |
-| `getPressureStats()` | Linux PSI (Pressure Stall Information) für CPU/IO/Memory, über 1 Sekunde gemessen |
-| `getSystemInfo()` | Hostname, Kernel-Version, OS-Typ, Architektur |
+| `system://info` | Hostname, Kernel-Version, OS-Typ, Architektur (JSON) |
 
 ### SystemHealthTools
 
 *Baut auf `NodeExporterTools` auf, benötigt ebenfalls einen laufenden `node_exporter`.*
 
-| Tool | Beschreibung |
-|---|---|
-| `getSystemAnomalies()` | Prüft CPU, Memory, Swap, Diskspace, System Load, Temperaturen und PSI gegen die in `application.properties` konfigurierten Schwellwerte. Liefert je Metrik einen Befund mit Severity `OK`/`WARNING`/`CRITICAL`. |
+| Tool | Titel | Beschreibung | Ergebnis |
+|---|---|---|---|
+| `getSystemAnomalies()` | System Health Check | Prüft CPU, Memory, Swap, Diskspace, System Load, Temperaturen und PSI gegen die konfigurierten Schwellwerte (`health.threshold.*`). Liefert die schlechteste Severity als Gesamturteil plus je Metrik einen Befund mit Severity `OK`/`WARNING`/`CRITICAL`. Die Load wird gegen die Kernzahl des Hosts laut `node_exporter` geprüft. | `{overall, findings: [...]}` |
 
 ---
 
