@@ -20,22 +20,26 @@ public class JavaProcessTools {
 
     record ProcessStats(double cpu, long ramMb) {}
 
+    // MCP structured output must be a JSON object, so the list is wrapped instead of returned bare.
+    record JavaProcessList(List<JavaProcessInfo> processes) {}
+
     // Spawns jps/ps but only reads process state: readOnlyHint/idempotentHint = true,
     // destructiveHint = false, openWorldHint = false (local processes only).
-    @McpTool(description = "Lists all running Java processes with PID, name, CPU usage (%) and RAM usage (MB)",
+    @McpTool(title = "Java Processes", generateOutputSchema = true,
+            description = "Lists all running Java processes with PID, name, CPU usage (%) and RAM usage (MB)",
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
-    public List<JavaProcessInfo> listJavaProcesses() {
+    public JavaProcessList listJavaProcesses() {
         Map<Long, String> names = javaProcessNames();
-        if (names.isEmpty()) return List.of();
+        if (names.isEmpty()) return new JavaProcessList(List.of());
 
         Map<Long, ProcessStats> stats = readStats(names.keySet());
-        return names.entrySet().stream()
+        return new JavaProcessList(names.entrySet().stream()
                 .map(e -> {
                     ProcessStats s = stats.getOrDefault(e.getKey(), new ProcessStats(0.0, 0L));
                     return new JavaProcessInfo(e.getKey(), e.getValue(), s.cpu(), s.ramMb());
                 })
                 .sorted(Comparator.comparingLong(JavaProcessInfo::pid))
-                .toList();
+                .toList());
     }
 
     private Map<Long, String> javaProcessNames() {

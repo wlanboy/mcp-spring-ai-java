@@ -96,14 +96,14 @@ class JavaProcessToolsTest {
     @Test
     void listJavaProcesses_containsCurrentJvm() {
         long currentPid = ProcessHandle.current().pid();
-        List<JavaProcessTools.JavaProcessInfo> processes = tools.listJavaProcesses();
+        List<JavaProcessTools.JavaProcessInfo> processes = tools.listJavaProcesses().processes();
 
         assertThat(processes).anySatisfy(p -> assertThat(p.pid()).isEqualTo(currentPid));
     }
 
     @Test
     void listJavaProcesses_isSortedByPid() {
-        List<Long> pids = tools.listJavaProcesses().stream()
+        List<Long> pids = tools.listJavaProcesses().processes().stream()
                 .map(JavaProcessTools.JavaProcessInfo::pid)
                 .toList();
         assertThat(pids).isSorted();
@@ -111,13 +111,13 @@ class JavaProcessToolsTest {
 
     @Test
     void listJavaProcesses_allEntriesHaveNonBlankName() {
-        assertThat(tools.listJavaProcesses())
+        assertThat(tools.listJavaProcesses().processes())
                 .allSatisfy(p -> assertThat(p.name()).isNotBlank());
     }
 
     @Test
     void listJavaProcesses_allEntriesHaveNonNegativeStats() {
-        assertThat(tools.listJavaProcesses()).allSatisfy(p -> {
+        assertThat(tools.listJavaProcesses().processes()).allSatisfy(p -> {
             assertThat(p.cpuPercent()).isGreaterThanOrEqualTo(0.0);
             assertThat(p.ramMb()).isGreaterThanOrEqualTo(0L);
         });

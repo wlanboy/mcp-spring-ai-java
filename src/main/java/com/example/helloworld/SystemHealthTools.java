@@ -1,6 +1,7 @@
 package com.example.helloworld;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.context.McpSyncRequestContext;
@@ -68,11 +69,16 @@ public class SystemHealthTools {
 
     record Anomaly(String metric, String value, Severity severity, String message) {}
 
+    // Wrapper object (MCP structured output must be a JSON object, not an array) that also
+    // carries the worst severity, so the LLM sees the overall verdict without scanning all findings.
+    record HealthReport(Severity overall, List<Anomaly> findings) {}
+
     // Read-only aggregated health check: readOnlyHint/idempotentHint = true,
     // destructiveHint = false, openWorldHint = false.
-    @McpTool(description = "Checks CPU, memory, swap, disk space, system load, hardware temperatures and Linux PSI pressure for anomalies. Returns all findings with severity OK/WARNING/CRITICAL.",
+    @McpTool(title = "System Health Check", generateOutputSchema = true,
+            description = "Checks CPU, memory, swap, disk space, system load, hardware temperatures and Linux PSI pressure for anomalies. Returns the overall severity plus all findings with severity OK/WARNING/CRITICAL.",
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = false))
-    public List<Anomaly> getSystemAnomalies(McpSyncRequestContext ctx) throws Exception {
+    public HealthReport getSystemAnomalies(McpSyncRequestContext ctx) {
         List<Anomaly> results = new ArrayList<>();
 
         // getHealthSnapshot() itself blocks for ~1s (before/after metrics sample) - report
@@ -113,7 +119,11 @@ public class SystemHealthTools {
         results.addAll(checkTemperatures(snap.temperatures()));
         results.addAll(checkPressure(snap.pressure()));
 
-        return results;
+        Severity overall = results.stream()
+                .map(Anomaly::severity)
+                .max(Comparator.naturalOrder())
+                .orElse(Severity.OK);
+        return new HealthReport(overall, results);
     }
 
     private List<Anomaly> checkDiskSpace(List<NodeExporterTools.DiskSpace> disks) {

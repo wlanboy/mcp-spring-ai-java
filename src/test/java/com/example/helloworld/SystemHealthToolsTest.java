@@ -65,44 +65,66 @@ class SystemHealthToolsTest {
     private void stub(NodeExporterTools.MemoryStats memory, NodeExporterTools.SwapStats swap,
                        NodeExporterTools.CpuUsage cpu, NodeExporterTools.SystemLoad load,
                        List<NodeExporterTools.DiskSpace> disks, List<NodeExporterTools.Temperature> temperatures,
-                       NodeExporterTools.PressureStats pressure) throws Exception {
+                       NodeExporterTools.PressureStats pressure) {
         when(nodeExporter.getHealthSnapshot()).thenReturn(
                 new NodeExporterTools.HealthSnapshot(memory, swap, cpu, load, disks, temperatures, pressure));
     }
 
-    private void stubAllOk() throws Exception {
+    private void stubAllOk() {
         stub(OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
     }
 
     // ── All-OK path ────────────────────────────────────────────────────────
 
     @Test
-    void getSystemAnomalies_allOkWhenEverythingNormal() throws Exception {
+    void getSystemAnomalies_allOkWhenEverythingNormal() {
         stubAllOk();
-        List<SystemHealthTools.Anomaly> result = systemHealth.getSystemAnomalies(ctx);
+        List<SystemHealthTools.Anomaly> result = systemHealth.getSystemAnomalies(ctx).findings();
         assertThat(result).allSatisfy(a ->
                 assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.OK));
+        assertThat(systemHealth.getSystemAnomalies(ctx).overall()).isEqualTo(SystemHealthTools.Severity.OK);
+    }
+
+    // ── Overall severity ──────────────────────────────────────────────────
+
+    @Test
+    void getSystemAnomalies_overallIsWorstFindingSeverity() {
+        // memory WARNING + disk CRITICAL -> overall CRITICAL
+        stub(new NodeExporterTools.MemoryStats(8192, 1638, 6554, 85.0),
+                OK_SWAP, OK_CPU, OK_LOAD,
+                List.of(new NodeExporterTools.DiskSpace("/", "/dev/sda1", "ext4", 100, 5, 95, 95.0)),
+                OK_TEMPERATURES, OK_PRESSURE);
+
+        assertThat(systemHealth.getSystemAnomalies(ctx).overall()).isEqualTo(SystemHealthTools.Severity.CRITICAL);
+    }
+
+    @Test
+    void getSystemAnomalies_overallWarningWhenOnlyWarnings() {
+        stub(new NodeExporterTools.MemoryStats(8192, 1638, 6554, 85.0),
+                OK_SWAP, OK_CPU, OK_LOAD, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
+
+        assertThat(systemHealth.getSystemAnomalies(ctx).overall()).isEqualTo(SystemHealthTools.Severity.WARNING);
     }
 
     // ── Memory ────────────────────────────────────────────────────────────
 
     @Test
-    void getSystemAnomalies_memoryCriticalAtThreshold() throws Exception {
+    void getSystemAnomalies_memoryCriticalAtThreshold() {
         stub(new NodeExporterTools.MemoryStats(8192, 0, 8192, 100.0),
                 OK_SWAP, OK_CPU, OK_LOAD, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("memory");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.CRITICAL);
         });
     }
 
     @Test
-    void getSystemAnomalies_memoryWarningBetweenThresholds() throws Exception {
+    void getSystemAnomalies_memoryWarningBetweenThresholds() {
         stub(new NodeExporterTools.MemoryStats(8192, 1638, 6554, 85.0),
                 OK_SWAP, OK_CPU, OK_LOAD, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("memory");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.WARNING);
         });
@@ -111,33 +133,33 @@ class SystemHealthToolsTest {
     // ── Swap ──────────────────────────────────────────────────────────────
 
     @Test
-    void getSystemAnomalies_swapCriticalWhenHighUsage() throws Exception {
+    void getSystemAnomalies_swapCriticalWhenHighUsage() {
         stub(OK_MEMORY, new NodeExporterTools.SwapStats(2048, 100, 1948, 95.0),
                 OK_CPU, OK_LOAD, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("swap");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.CRITICAL);
         });
     }
 
     @Test
-    void getSystemAnomalies_swapSkippedWhenNoSwapPartition() throws Exception {
+    void getSystemAnomalies_swapSkippedWhenNoSwapPartition() {
         stub(OK_MEMORY, new NodeExporterTools.SwapStats(0, 0, 0, 0.0),
                 OK_CPU, OK_LOAD, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx))
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings())
                 .noneMatch(a -> a.metric().equals("swap"));
     }
 
     // ── CPU ───────────────────────────────────────────────────────────────
 
     @Test
-    void getSystemAnomalies_cpuWarningBetweenThresholds() throws Exception {
+    void getSystemAnomalies_cpuWarningBetweenThresholds() {
         stub(OK_MEMORY, OK_SWAP, new NodeExporterTools.CpuUsage(70.0, 10.0, 20.0, 80.0),
                 OK_LOAD, OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("cpu");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.WARNING);
         });
@@ -146,26 +168,26 @@ class SystemHealthToolsTest {
     // ── Load ──────────────────────────────────────────────────────────────
 
     @Test
-    void getSystemAnomalies_loadCriticalWhenDoubleCores() throws Exception {
+    void getSystemAnomalies_loadCriticalWhenDoubleCores() {
         int cores = Runtime.getRuntime().availableProcessors();
         stub(OK_MEMORY, OK_SWAP, OK_CPU,
                 new NodeExporterTools.SystemLoad(cores * 2.5, cores * 2.0, cores * 1.5),
                 OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("load");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.CRITICAL);
         });
     }
 
     @Test
-    void getSystemAnomalies_loadWarningWhenExceedsCoreCount() throws Exception {
+    void getSystemAnomalies_loadWarningWhenExceedsCoreCount() {
         int cores = Runtime.getRuntime().availableProcessors();
         stub(OK_MEMORY, OK_SWAP, OK_CPU,
                 new NodeExporterTools.SystemLoad(cores * 1.5, cores, cores * 0.8),
                 OK_DISKS, OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("load");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.WARNING);
         });
@@ -174,26 +196,26 @@ class SystemHealthToolsTest {
     // ── Disk ──────────────────────────────────────────────────────────────
 
     @Test
-    void getSystemAnomalies_diskCriticalWhenNearlyFull() throws Exception {
+    void getSystemAnomalies_diskCriticalWhenNearlyFull() {
         stub(OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD,
                 List.of(new NodeExporterTools.DiskSpace("/", "/dev/sda1", "ext4", 100, 5, 95, 95.0)),
                 OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("disk:/");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.CRITICAL);
         });
     }
 
     @Test
-    void getSystemAnomalies_diskWarningForEachOverloadedMount() throws Exception {
+    void getSystemAnomalies_diskWarningForEachOverloadedMount() {
         stub(OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD,
                 List.of(
                         new NodeExporterTools.DiskSpace("/",     "/dev/sda1", "ext4", 100, 15, 85, 85.0),
                         new NodeExporterTools.DiskSpace("/data", "/dev/sdb1", "ext4", 200, 30, 170, 85.0)),
                 OK_TEMPERATURES, OK_PRESSURE);
 
-        List<SystemHealthTools.Anomaly> result = systemHealth.getSystemAnomalies(ctx);
+        List<SystemHealthTools.Anomaly> result = systemHealth.getSystemAnomalies(ctx).findings();
         assertThat(result).anySatisfy(a -> assertThat(a.metric()).isEqualTo("disk:/"));
         assertThat(result).anySatisfy(a -> assertThat(a.metric()).isEqualTo("disk:/data"));
         assertThat(result)
@@ -202,10 +224,10 @@ class SystemHealthToolsTest {
     }
 
     @Test
-    void getSystemAnomalies_diskOkWhenNoDiskSpaceReturned() throws Exception {
+    void getSystemAnomalies_diskOkWhenNoDiskSpaceReturned() {
         stub(OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD, List.of(), OK_TEMPERATURES, OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("disk");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.OK);
         });
@@ -214,22 +236,22 @@ class SystemHealthToolsTest {
     // ── Temperature ───────────────────────────────────────────────────────
 
     @Test
-    void getSystemAnomalies_temperatureCriticalNearSensorLimit() throws Exception {
+    void getSystemAnomalies_temperatureCriticalNearSensorLimit() {
         stub(OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD, OK_DISKS,
                 List.of(new NodeExporterTools.Temperature("coretemp", "temp1", 96.0, 100.0)),
                 OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).startsWith("temperature:");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.CRITICAL);
         });
     }
 
     @Test
-    void getSystemAnomalies_temperatureOkWhenNoSensors() throws Exception {
+    void getSystemAnomalies_temperatureOkWhenNoSensors() {
         stub(OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD, OK_DISKS, List.of(), OK_PRESSURE);
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("temperature");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.OK);
         });
@@ -238,11 +260,11 @@ class SystemHealthToolsTest {
     // ── PSI ───────────────────────────────────────────────────────────────
 
     @Test
-    void getSystemAnomalies_psiIoCriticalUnderHighIoLoad() throws Exception {
+    void getSystemAnomalies_psiIoCriticalUnderHighIoLoad() {
         stub(OK_MEMORY, OK_SWAP, OK_CPU, OK_LOAD, OK_DISKS, OK_TEMPERATURES,
                 new NodeExporterTools.PressureStats(0.0, 0.0, 25.0, 0.0, 0.0));
 
-        assertThat(systemHealth.getSystemAnomalies(ctx)).anySatisfy(a -> {
+        assertThat(systemHealth.getSystemAnomalies(ctx).findings()).anySatisfy(a -> {
             assertThat(a.metric()).isEqualTo("psi:io:full");
             assertThat(a.severity()).isEqualTo(SystemHealthTools.Severity.CRITICAL);
         });
